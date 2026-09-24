@@ -23,7 +23,7 @@ sessions_spawn({
   agentId: "brief-writer",
   mode: "run",
   context: "isolated",           // never fork the main transcript
-  taskName: "brief <course>@<date>",
+  taskName: "brief-<courseslug>-<yyyymmdd>",   // must match [a-z][a-z0-9_-]{0,63}, e.g. brief-mas665-20260929
   task: <the prompt below + the input bundle, inline>
 })
 ```
