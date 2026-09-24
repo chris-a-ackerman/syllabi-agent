@@ -1,0 +1,29 @@
+# Secrets — never commit. Real values live on the Maritime volume (/data/secrets, /data/rclone)
+# or in Maritime's environment settings.
+.env
+.env.*
+!.env.example
+*.cookies.json
+notebooklm-cookies.json
+storage_state.json
+rclone.conf
+secrets/
+*.pem
+*.key
+
+# Runtime data — the agent writes these under /data on Maritime; local dry runs must not leak into git
+data/
+/data/
+memory/prep-log.json
+logs/
+readings/
+podcasts/
+*.mp3
+*.m4a
+
+# Tooling
+__pycache__/
+*.pyc
+.venv/
+node_modules/
+.DS_Store
