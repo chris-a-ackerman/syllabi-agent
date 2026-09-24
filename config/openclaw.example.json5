@@ -1,0 +1,37 @@
+// Sketch of the ~/.openclaw/openclaw.json settings this repo assumes.
+// Keys follow the OpenClaw docs (gateway/config-agents, tools/subagents/tool-policy),
+// read from the openclaw/openclaw repo on 2026-09-24. VERIFY against the deployed version:
+// Maritime may generate this file itself. Merge these settings in; don't overwrite it.
+{
+  agents: {
+    defaults: {
+      // Where Maritime mounts this repo's workspace/ (default ~/.openclaw/workspace).
+      workspace: "~/.openclaw/workspace",
+      // We manage AGENTS.md / SOUL.md ourselves; don't seed BOOTSTRAP.md etc.
+      skipBootstrap: true,
+      subagents: { maxConcurrent: 1, maxSpawnDepth: 1 },
+    },
+    entries: {
+      main: {
+        subagents: { allowAgents: ["brief-writer"], requireAgentId: true },
+      },
+      // Tool-less brief writer. Its own workspace only needs a tiny AGENTS.md
+      // (or none): the full instructions travel in the sessions_spawn task.
+      "brief-writer": {
+        workspace: "~/.openclaw/workspace-brief-writer",
+        skills: [],
+        tools: {
+          deny: [
+            "read", "write", "edit", "apply_patch", "exec", "process",
+            "browser", "web_fetch", "web_search", "canvas", "nodes",
+            "cron", "gateway", "image", "message",
+            "sessions_spawn", "sessions_send", "subagents",
+          ],
+        },
+      },
+    },
+  },
+  // Only needed if brief-writer is run through llm-task instead of sessions_spawn.
+  plugins: { entries: { "llm-task": { enabled: true } } },
+  tools: { alsoAllow: ["llm-task"] },
+}
