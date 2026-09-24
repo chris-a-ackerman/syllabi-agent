@@ -18,8 +18,10 @@ MIT AI Studio (MAS.665). Plan of record: [`README.md`](../README.md).
 
 ## 3. Agent loop
 
-<!-- Three Maritime cron triggers (prep / poll / notify), why cron and not timers (sleep/wake),
-     the 30 s budget and start/poll split, stopping conditions, the four ask-a-human cases, run logs. -->
+<!-- Three phases (prep / poll / notify) as OpenClaw cron jobs in ET, woken by one Maritime */30
+     trigger: why two layers (sleeping container; Maritime doesn't mirror OpenClaw's SQLite job store;
+     CLI triggers carry no prompt/tz). The 30 s budget and start/poll split, stopping conditions,
+     the four ask-a-human cases, run logs. Evidence: docs/deploy-maritime.md verification log. -->
 
 ## 4. Subagent
 
@@ -29,7 +31,12 @@ MIT AI Studio (MAS.665). Plan of record: [`README.md`](../README.md).
 ## 5. Failure recovery
 
 <!-- Walk through the expired-NotebookLM-cookie case end to end, with log and Telegram screenshots
-     (evidence/failures/). Canvas 403 fallback. -->
+     (evidence/failures/). Canvas 403 fallback.
+     Deploy-time failures worth a paragraph (docs/deploy-maritime.md):
+     - the model asked for /approve with approvals off, which would have stalled every unattended run;
+       fixed by the pre-authorization section in AGENTS.md;
+     - a scheduled job silently never fired because Maritime didn't see it; found by sleeping the
+       agent and testing; fixed with an explicit wake trigger. -->
 
 ## 6. Evaluation
 
@@ -46,7 +53,6 @@ MIT AI Studio (MAS.665). Plan of record: [`README.md`](../README.md).
   writes to Canvas.
 - **Refreshing NotebookLM cookies** when they expire (unofficial API, no refresh token).
 - **Re-authorizing rclone / Canvas tokens** when they expire or are revoked.
-- **DST:** swapping the UTC cron sets on 2026-11-01 and 2027-03-14 if Maritime triggers are UTC-only.
 
 ## Limitations and future work
 

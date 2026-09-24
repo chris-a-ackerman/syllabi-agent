@@ -1,13 +1,20 @@
-// Sketch of the ~/.openclaw/openclaw.json settings this repo assumes.
-// Keys follow the OpenClaw docs (gateway/config-agents, tools/subagents/tool-policy),
-// read from the openclaw/openclaw repo on 2026-09-24. VERIFY against the deployed version:
-// Maritime may generate this file itself. Merge these settings in; don't overwrite it.
+// Settings to MERGE into ~/.openclaw/openclaw.json (= /data/.openclaw/openclaw.json on Maritime).
+// Keys follow the OpenClaw docs (gateway/config-agents, tools/subagents/tool-policy).
+//
+// Verified 2026-09-24: Maritime generates this file. It sets gateway auth, the model
+// (openai/gpt-5.4 via https://api.maritime.sh/api/llm/v1), a Browserbase MCP server,
+// tools.deny ["browser"] and browser.enabled false. It has NO agents.entries, so the subagent
+// settings below are still untested. Back up first (Maritime also keeps openclaw.json.last-good),
+// merge by hand, restart, and check the file wasn't reverted.
+//
+// Exec policy is already security=full, ask=off (`openclaw approvals get`); nothing to set here.
 {
   agents: {
     defaults: {
-      // Where Maritime mounts this repo's workspace/ (default ~/.openclaw/workspace).
-      workspace: "~/.openclaw/workspace",
-      // We manage AGENTS.md / SOUL.md ourselves; don't seed BOOTSTRAP.md etc.
+      // Leave `workspace` at its default (~/.openclaw/workspace = /data/.openclaw/workspace):
+      // Maritime writes MARITIME.md there, and scripts/install-workspace.sh merges ours in.
+      // Bootstrap already completed on first boot (BOOTSTRAP.md was removed), so skipBootstrap
+      // is only a safety net.
       skipBootstrap: true,
       subagents: { maxConcurrent: 1, maxSpawnDepth: 1 },
     },

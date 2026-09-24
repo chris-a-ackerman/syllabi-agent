@@ -27,3 +27,6 @@ __pycache__/
 .venv/
 node_modules/
 .DS_Store
+
+# Maritime CLI link file
+.maritime/

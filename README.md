@@ -3,8 +3,9 @@
 An OpenClaw agent, hosted on [Maritime](https://maritime.sh), that gets me ready for each class.
 Homework 2 for MIT AI Studio (MAS.665): *Engineer a Reliable Agent*.
 
-Deploying means pointing Maritime's OpenClaw template at this repo, loading `workspace/` as the
-agent workspace, and adding the three cron triggers in [`triggers/`](triggers/README.md).
+Deploying means creating an agent from Maritime's OpenClaw template, cloning this repo onto its
+persistent volume, running two install scripts, and adding one Maritime wake trigger. The steps
+were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritime.md).
 
 > **Status: V0 scaffold.** The instructions, schemas, trigger prompts and tool contracts are in
 > place. The skill scripts (`canvas`, `nlm`, `drive`) are stubs, to be filled in by V2–V4.
@@ -19,8 +20,11 @@ agent workspace, and adding the three cron triggers in [`triggers/`](triggers/RE
 ├── .env.example                  ← every secret/setting, with where it comes from
 ├── .gitignore                    ← keeps secrets and /data runtime output out of git
 ├── config/
-│   └── openclaw.example.json5    ← sketch of the openclaw.json bits this repo assumes (verify on deploy)
-├── workspace/                    ← the OpenClaw agent workspace (Maritime loads this)
+│   └── openclaw.example.json5    ← openclaw.json settings to merge in (subagent still untested)
+├── scripts/
+│   ├── install-workspace.sh      ← merges workspace/ into Maritime's OpenClaw workspace (re-run after git pull)
+│   └── install-jobs.sh           ← creates the 5 OpenClaw cron jobs (ET) from triggers/*.md
+├── workspace/                    ← our half of the OpenClaw workspace (installed by install-workspace.sh)
 │   ├── AGENTS.md                 ← operating instructions: phases, stop rules, ask-a-human, hard rules
 │   ├── SOUL.md                   ← persona / tone / boundaries
 │   ├── agents/
@@ -29,16 +33,17 @@ agent workspace, and adding the three cron triggers in [`triggers/`](triggers/RE
 │   │   ├── canvas/SKILL.md       ← Canvas LMS reads (stub)
 │   │   ├── nlm/SKILL.md          ← nlm-prep / nlm-status for NotebookLM (stub)
 │   │   └── drive/SKILL.md        ← drive-put via rclone (stub)
-│   └── memory/
+│   └── memory-templates/
 │       ├── prep-log.schema.json  ← JSON Schema for /data/memory/prep-log.json
 │       ├── brief.schema.json     ← JSON Schema for brief-writer output
 │       └── course-notes.md       ← template seeded to /data/memory/course-notes.md
 ├── triggers/
-│   ├── README.md                 ← the three Maritime cron triggers, ET → UTC
-│   ├── prep.md                   ← exact prompt delivered by the 19:00 trigger
-│   ├── poll.md                   ← exact prompt delivered by the 30-min poll triggers
-│   └── notify.md                 ← exact prompt delivered by the 06:30 trigger
+│   ├── README.md                 ← how scheduling works: 1 Maritime wake trigger + 5 OpenClaw jobs (ET)
+│   ├── prep.md                   ← exact prompt of the 19:00 job
+│   ├── poll.md                   ← exact prompt of the 30-min poll jobs
+│   └── notify.md                 ← exact prompt of the 06:30 job
 ├── docs/
+│   ├── deploy-maritime.md        ← verified deploy runbook + what we learned about Maritime
 │   ├── tool-contract.md          ← every tool: name, inputs, outputs, error shape
 │   └── hw2-writeup.md            ← HW2 writeup skeleton (one heading per rubric item)
 └── evidence/
@@ -46,10 +51,12 @@ agent workspace, and adding the three cron triggers in [`triggers/`](triggers/RE
     └── failures/                 ← screenshots/logs of failures and recoveries
 ```
 
-At runtime (on the Maritime volume, never in git):
+At runtime (on the Maritime volume, never in git). `HOME` is `/data`:
 
 ```
 /data/
+├── .openclaw/                    ← OpenClaw config, state DB (cron jobs) and workspace
+├── syllabi-agent/                ← this repo, cloned
 ├── memory/prep-log.json          ← one record per (course, class_date)
 ├── memory/course-notes.md        ← learned per-course quirks
 ├── logs/<YYYY-MM-DD>-<trigger>.md← one run log per trigger firing (appended)
@@ -87,12 +94,17 @@ Timing: **24 hours before class** if something is due beforehand, **morning-of**
 
 ### Maritime constraints that shape the design
 
-- Containers sleep when idle and wake in ~1s on a message/trigger. In-process timers don't fire
-  while asleep, so **all scheduling is Maritime cron triggers**, and each one delivers a prompt.
-- **Only `/data` persists** across sleep/wake/redeploy. All memory files, logs, secrets
-  (NotebookLM cookies, rclone config), downloaded readings and podcasts go under `/data`.
-- **30-second chat reply budget.** Long work runs in the background, so podcast generation is
-  *started* in one trigger and *polled* by a later one.
+- Containers sleep when idle and wake in well under a second on a message or trigger. Nothing
+  runs while asleep, so scheduling takes **one Maritime wake trigger every 30 minutes plus
+  OpenClaw cron jobs in America/New_York** that do the work
+  ([`triggers/README.md`](triggers/README.md) explains why both are needed).
+- **Only `/data` persists** across sleep/wake/restart. `HOME` is `/data`, so `~/.openclaw` (config,
+  cron jobs, workspace) persists too. All memory files, logs, secrets (NotebookLM cookies, rclone
+  config), downloaded readings and podcasts go under `/data`.
+- **30-second chat reply budget, 60 s default command timeout.** Long work runs in the background,
+  so podcast generation is *started* in one run and *polled* by a later one. A `git clone` that ran
+  past the budget came back as a garbage reply during deploy.
+- **The model is GPT-5.4** through Maritime's LLM proxy by default (no API key needed).
 - 2 GB RAM / 5 GB SSD base; 100 MB per file transfer.
 
 ### Tools (rubric 1)
@@ -111,24 +123,25 @@ Full contracts in [`docs/tool-contract.md`](docs/tool-contract.md).
   Cookies are at `/data/secrets/notebooklm-cookies.json`. Auth failure returns error code `NLM_AUTH`.
 - **`drive-put <local_path> <remote_dir>`** returns a share link, via rclone. Config is at
   `/data/rclone/rclone.conf`. Idempotent.
-- **Telegram** (Maritime channel) for briefs and questions.
+- **Telegram** (Maritime channel) for briefs and questions, sent with `maritime-telegram-send`.
 
 ### Memory (rubric 2): read at the start of every run, written at the end
 
-- **`/data/memory/prep-log.json`** (schema: [`workspace/memory/prep-log.schema.json`](workspace/memory/prep-log.schema.json)):
+- **`/data/memory/prep-log.json`** (schema: [`workspace/memory-templates/prep-log.schema.json`](workspace/memory-templates/prep-log.schema.json)):
   one record per (course, class_date):
   `readings[] {title, source: canvas_file|external, id_or_url, local_path?}`, `drive_paths[]`,
   `notebook_id?`, `podcast_url?`, `brief?` (JSON from subagent), `notify_at`,
   `status ∈ {pending, podcast-pending, ready, done, partial, needs-human}`, `attempts`,
   `last_error?`, `history[] of {ts, trigger, action}`.
   **Never redo a recorded step. Never start a second podcast for a session that has a `notebook_id`.**
-- **`/data/memory/course-notes.md`** (template: [`workspace/memory/course-notes.md`](workspace/memory/course-notes.md)):
+- **`/data/memory/course-notes.md`** (template: [`workspace/memory-templates/course-notes.md`](workspace/memory-templates/course-notes.md)):
   per-course learned quirks (where readings actually live, which links need login, where pre-class
   questions are posted). Read before planning, written after each run.
 
-### Agent loop (rubric 3): three Maritime cron triggers (America/New_York)
+### Agent loop (rubric 3): three phases on OpenClaw cron jobs (America/New_York)
 
-Prompts in [`triggers/`](triggers/); UTC cron expressions in [`triggers/README.md`](triggers/README.md).
+Prompts in [`triggers/`](triggers/); job definitions and the Maritime wake trigger in
+[`triggers/README.md`](triggers/README.md).
 
 - **19:00 `prep`:** for every class in the next 48h that is not yet podcast-pending/ready/done:
   fetch readings → Drive → notebook + start audio → delegate brief to subagent → validate →
@@ -154,7 +167,7 @@ Definition: [`workspace/agents/brief-writer.md`](workspace/agents/brief-writer.m
 Input: extracted reading text (cap ~40k tokens, truncated per reading with a note) + session row +
 Canvas assignment/page text. **No tools.** Output: strict JSON
 `{topic, why_it_matters, key_arguments[], prep_checklist[], pre_class_questions[{question, source, draft_answer}]}`.
-The main agent validates it against [`brief.schema.json`](workspace/memory/brief.schema.json).
+The main agent validates it against [`brief.schema.json`](workspace/memory-templates/brief.schema.json).
 Every `pre_class_questions[].question` must appear (fuzzy ≥ 0.9) in the Canvas text; otherwise
 it is dropped and logged as a hallucination. On schema failure the main agent re-prompts once,
 then marks the session partial. The main agent formats the Telegram message, not the subagent.
@@ -180,29 +193,24 @@ Cases table: [`evidence/eval/cases.md`](evidence/eval/cases.md).
 
 ---
 
-## Deploy notes and open questions
+## Deploy findings (verified 2026-09-24)
 
-These points could not be confirmed while writing the scaffold, because docs.openclaw.ai and
-maritime.sh were blocked from the build environment. OpenClaw's docs were read from their GitHub
-source instead. Maritime was only visible through search snippets. Check each point on first deploy:
+The scaffold was written without access to Maritime's docs. These are the answers from the first
+deploy. The full runbook is in [`docs/deploy-maritime.md`](docs/deploy-maritime.md).
 
-1. **Persistent volume path.** The plan assumes `/data`. Maritime search snippets say `/data` is
-   the volume root "for most templates", but the OpenClaw guide mentions `/root/.openclaw` as the
-   persisted location. If the OpenClaw template does not mount `/data`, symlink `/data` to the
-   persisted directory, or change `DATA_DIR` and every `/data/...` path in `workspace/`,
-   `triggers/` and `docs/`.
-2. **Where Maritime puts the workspace.** OpenClaw defaults to `~/.openclaw/workspace`
-   (`OPENCLAW_WORKSPACE_DIR` overrides it). Confirm that Maritime can load this repo's
-   `workspace/` there, or copy it there on boot.
-3. **Trigger timezone.** It is unknown whether Maritime cron triggers accept a timezone or are
-   UTC-only. [`triggers/README.md`](triggers/README.md) gives both, including DST-shifted UTC sets.
-4. **Cron minimum interval and trigger count.** The 30-minute poll needs sub-hourly cron and
-   several trigger entries.
-5. **Concurrency.** Can two triggers (e.g. poll and notify) run at the same time on one agent?
-   The poll schedule skips 06:30 to avoid that, and prep-log status checks make sends idempotent.
-6. **Subagents.** OpenClaw has no file-based subagent registry. `brief-writer` is a
-   `sessions_spawn` target: an `agents.entries.brief-writer` entry whose tools are all denied
-   (see `config/openclaw.example.json5`). The fallback is the bundled `llm-task` tool with
-   `brief.schema.json`.
-7. **Name clash.** OpenClaw has a built-in tool called `canvas`, which is a UI canvas unrelated to
-   Canvas LMS. The skill here is `canvas`. If the model confuses the two, rename it to `canvas-lms`.
+| # | Question | Answer |
+| --- | --- | --- |
+| 1 | Persistent volume path | ✅ `/data` is a real volume (it has `lost+found`), and it survived sleep and restart. `HOME=/data`. |
+| 2 | Where the workspace lives | ✅ `/data/.openclaw/workspace`. It's unconfirmed whether the template uses `--repo`/`--branch` (the test pointed at `main`, which doesn't have these files yet), so we clone the repo to `/data/syllabi-agent` and run `scripts/install-workspace.sh`. Maritime writes `MARITIME.md` and a block at the top of `AGENTS.md` there, so we merge rather than repoint the workspace. |
+| 3 | Trigger timezone | ✅ OpenClaw jobs take `--tz America/New_York`. Maritime CLI triggers are UTC with no prompt, which is fine for an every-30-minutes wake. |
+| 4 | Minimum interval | ✅ `*/5` was accepted and fired, so `*/30` is fine. |
+| 5 | Concurrency | ⏳ Open. The `*_sent_at` guards make sends idempotent regardless. |
+| 6 | Subagents | ⏳ Open. The generated `openclaw.json` has no `agents.entries`. Merge `config/openclaw.example.json5` and test `sessions_spawn`. |
+| 7 | `canvas` name clash | ⏳ Open. It will show up once the canvas skill is implemented. |
+| new | Schedule sync | ❌ Maritime's docs say it mirrors `~/.openclaw/cron/jobs.json`, but OpenClaw 2026.6.1+ stores jobs in SQLite, so nothing is mirrored. Fixed with an explicit `*/30` wake trigger. |
+| new | Exec approvals | The model (GPT-5.4) asked Chris to `/approve` network commands although the policy was `security=full, ask=off`. Fixed with the "Command execution (pre-authorized)" section in `AGENTS.md`. |
+| new | Telegram from a cron run | A normal reply goes nowhere. Use `maritime-telegram-send` (verified). |
+| new | Slow commands | A `git clone` that ran past the 30 s reply budget returned a garbage reply ("node-inspect-debugger"). Run slow work in the background. |
+
+Still to check before V2: whether `python3`, `pip`, `notebooklm-py` and `rclone` are available, and
+whether installs survive a restart (anything installed outside `/data` may not).

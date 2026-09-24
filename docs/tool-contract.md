@@ -157,8 +157,16 @@ Config: `$RCLONE_CONFIG` = `/data/rclone/rclone.conf`. Root: `$DRIVE_READINGS_RO
 
 ## 5. Telegram (Maritime channel)
 
-Sent through OpenClaw's message/channel tool on the paired Telegram channel. Only the main agent
-sends. Sub-agents lose the `message` tool by design.
+Paired in the Maritime dashboard (agent → **Channels** → Telegram). Verified 2026-09-24:
+
+- **Proactive sends** (everything a cron job sends) use Maritime's CLI:
+  `maritime-telegram-send "<text>"` or `printf '%s' "$msg" | maritime-telegram-send -`.
+  It requires `MARITIME_TELEGRAM_CONNECTED=1` in the environment. A plain chat reply from a cron
+  run goes nowhere, because nobody messaged the agent.
+- **Replies** to a message Chris sent on Telegram go back on the same channel automatically.
+- **Files**: `maritime-share <abs path>`, then paste its fenced output verbatim.
+
+Only the main agent sends. The subagent has `exec` and `message` denied, so it can do neither.
 
 | Message | Content | Guard |
 | --- | --- | --- |
@@ -168,7 +176,8 @@ sends. Sub-agents lose the `message` tool by design.
 
 | code | when | retryable |
 | --- | --- | --- |
-| `TELEGRAM_SEND_FAILED` | channel error | yes (once); if the retry fails, leave `*_sent_at` unset so the next poll retries |
+| `TELEGRAM_SEND_FAILED` | `maritime-telegram-send` exits non-zero | yes (once); if the retry fails, leave `*_sent_at` unset so the next poll retries |
+| `TELEGRAM_NOT_CONNECTED` | `MARITIME_TELEGRAM_CONNECTED` is not `1` | no; log it, leave `*_sent_at` unset, Chris must re-pair the channel |
 
 ---
 
@@ -181,7 +190,7 @@ Spawned via `sessions_spawn({agentId: "brief-writer", mode: "run", context: "iso
 | --- | --- |
 | Input | inline in `task`: session row, Canvas assignment/page text, extracted reading text (≤ ~40k tokens total, per-reading truncation note), course-notes section |
 | Tools | none |
-| Output | JSON matching `workspace/memory/brief.schema.json` |
+| Output | JSON matching `workspace/memory-templates/brief.schema.json` |
 
 Validation errors (raised by the main agent):
 

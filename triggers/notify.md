@@ -1,4 +1,4 @@
-<!-- Maritime cron trigger: notify — 06:30 America/New_York daily. Everything below the line is the exact prompt text. -->
+<!-- OpenClaw cron job (America/New_York, see README.md): notify — 06:30 America/New_York daily. Everything below the line is the exact prompt text. -->
 ---
 [trigger: notify]
 

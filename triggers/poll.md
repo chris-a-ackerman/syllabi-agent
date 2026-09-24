@@ -1,4 +1,4 @@
-<!-- Maritime cron trigger: poll — every 30 min 19:30–23:00 and 05:30–09:00 America/New_York (06:30 left to notify). Everything below the line is the exact prompt text. -->
+<!-- OpenClaw cron job (America/New_York, see README.md): poll — every 30 min 19:30–23:00 and 05:30–09:00 America/New_York (06:30 left to notify). Everything below the line is the exact prompt text. -->
 ---
 [trigger: poll]
 

@@ -1,63 +1,74 @@
-# Maritime triggers
+# Schedules
 
-All scheduling is Maritime cron triggers. The container sleeps, so in-process timers never fire.
-Each trigger delivers the prompt text from its file: everything below the `---` line, starting at
-`[trigger: …]`. Add them with, for example,
-`maritime trigger add --type cron --schedule "<expr>"` and the prompt from the file. Check the
-flags against `maritime trigger --help`.
+Verified on Maritime (OpenClaw template `ghcr.io/openclaw/openclaw:2026.7.1`) on 2026-09-24.
 
-Design times are **America/New_York**.
+Scheduling takes **two layers**, because the container sleeps and a sleeping container runs nothing:
 
-| Trigger | ET schedule | Prompt |
-| --- | --- | --- |
-| `prep` | 19:00 daily | [`prep.md`](prep.md) |
-| `poll` | every 30 min, 19:30–23:00 and 05:30–09:00 (**skips 06:30**) | [`poll.md`](poll.md) |
-| `notify` | 06:30 daily | [`notify.md`](notify.md) |
+| Layer | What | Where it's set | Timezone |
+| --- | --- | --- | --- |
+| **Wake** | one Maritime cron trigger, `*/30 * * * *` | your laptop: `maritime triggers create` | UTC (doesn't matter: it's every 30 min) |
+| **Work** | five OpenClaw cron jobs whose prompts are the files in this folder | inside the agent: `scripts/install-jobs.sh` | **America/New_York** |
 
-`poll` skips 06:30 so it cannot run at the same time as `notify`. It also starts at 19:30, after
-`prep`. Sends are idempotent anyway (`brief_sent_at` / `podcast_sent_at`).
+At :00 and :30 Maritime wakes the container (a bare wake: no chat message, no model call). OpenClaw's
+scheduler then runs whichever job is due. When the agent is already awake, OpenClaw runs the job
+without needing the wake. Maritime puts the agent back to sleep on its own when it goes idle.
 
-## If Maritime triggers accept a timezone (preferred)
+## Why not just one layer?
 
-Set the timezone to `America/New_York` and use these, with no DST maintenance:
+- **Maritime triggers can't carry a prompt or a timezone from the CLI.** `maritime triggers create`
+  takes only `--type` and `--cron`.
+- **Maritime doesn't see OpenClaw's jobs.** Its `MARITIME.md` says it mirrors
+  `~/.openclaw/cron/jobs.json` into wake triggers, but OpenClaw moved jobs into its SQLite state
+  database (`/data/.openclaw/state/openclaw.sqlite`) in 2026.6.1. There is no `jobs.json`, so nothing
+  is mirrored. We tested this: a one-time OpenClaw job did not fire while the agent slept, and ran
+  late the next time something woke the agent.
+- A 5-minute Maritime trigger (`*/5`) was accepted and fired, so `*/30` is well within the
+  minimum interval.
 
-| Trigger | Cron (ET) |
-| --- | --- |
-| prep | `0 19 * * *` |
-| notify | `30 6 * * *` |
-| poll (a) | `30 5,19 * * *` |
-| poll (b) | `0 6,9,23 * * *` |
-| poll (c) | `0,30 7-8,20-22 * * *` |
+## Setup
 
-## If triggers are UTC-only
+**1. Wake trigger** (once, from your laptop):
 
-New York is **UTC−4 (EDT) until Sun 2026-11-01 02:00**, then **UTC−5 (EST) until Sun 2027-03-14**.
-UTC cron can't follow DST, so swap sets on those dates. The agent always reasons in ET, so an
-hour of drift only shifts timing and does not break logic.
+```
+maritime triggers create class-prep-repo --type cron --cron "*/30 * * * *"
+maritime triggers list class-prep-repo
+```
 
-### EDT: now through 2026-10-31 (and again from 2027-03-14)
+Delete test triggers with `maritime triggers delete <agent> <trigger-id>` (agent name first).
 
-| Trigger | Cron (UTC) | Fires at (ET) |
-| --- | --- | --- |
-| prep | `0 23 * * *` | 19:00 |
-| notify | `30 10 * * *` | 06:30 |
-| poll (a) | `30 9,23 * * *` | 05:30, 19:30 |
-| poll (b) | `0 3,10,13 * * *` | 23:00, 06:00, 09:00 |
-| poll (c) | `0,30 0-2,11-12 * * *` | 20:00–22:30, 07:00–08:30 |
+**2. Jobs** (inside the agent, e.g. from the OpenClaw Dashboard chat):
 
-### EST: 2026-11-01 through 2027-03-13
+```
+Run: sh /data/syllabi-agent/scripts/install-jobs.sh
+```
 
-| Trigger | Cron (UTC) | Fires at (ET) |
-| --- | --- | --- |
-| prep | `0 0 * * *` | 19:00 (previous ET day) |
-| notify | `30 11 * * *` | 06:30 |
-| poll (a) | `30 0,10 * * *` | 19:30, 05:30 |
-| poll (b) | `0 4,11,14 * * *` | 23:00, 06:00, 09:00 |
-| poll (c) | `0,30 1-3,12-13 * * *` | 20:00–22:30, 07:00–08:30 |
+After editing a prompt file: `git pull`, then `install-jobs.sh --replace`.
 
-Under EST, UTC midnight is 19:00 ET on the *previous* calendar day. The prompts tell the agent
-to derive "today" from ET, never from the trigger's clock.
+## Jobs (America/New_York)
 
-Poll is split into three expressions because one cron line can't express two half-hour windows
-that each start and end on a different half hour. Total poll firings per day: 15
-(8 evening + 7 morning; 06:30 belongs to `notify`).
+| Job | Cron (ET) | Fires at | Prompt |
+| --- | --- | --- | --- |
+| `class-prep-prep` | `0 19 * * *` | 19:00 | [`prep.md`](prep.md) |
+| `class-prep-notify` | `30 6 * * *` | 06:30 | [`notify.md`](notify.md) |
+| `class-prep-poll-a` | `30 5,19 * * *` | 05:30, 19:30 | [`poll.md`](poll.md) |
+| `class-prep-poll-b` | `0 6,9,23 * * *` | 06:00, 09:00, 23:00 | [`poll.md`](poll.md) |
+| `class-prep-poll-c` | `0,30 7-8,20-22 * * *` | 07:00–08:30, 20:00–22:30 | [`poll.md`](poll.md) |
+
+Poll runs 15 times a day (8 evening, 7 morning). It skips 06:30, which belongs to `notify`, and
+starts at 19:30, after `prep`. Poll needs three expressions because one cron line can't express two
+half-hour windows that each start and end on a different half hour.
+
+Every job is created with `--tz America/New_York --exact --session isolated --no-deliver`:
+
+- `--tz`: the schedule follows EDT/EST automatically. No DST maintenance.
+- `--exact`: OpenClaw otherwise staggers top-of-hour jobs by up to 5 minutes.
+- `--session isolated`: a fresh transcript per run. State lives in `/data/memory`.
+- `--no-deliver`: the agent sends Telegram itself with `maritime-telegram-send`.
+
+Each prompt file's text below its `---` line is the exact job prompt.
+
+## Still open
+
+- **Overlapping runs.** If `prep` is still running at 19:30, can `poll` start alongside it?
+  OpenClaw queues runs into execution lanes, and the prep-log `*_sent_at` guards make sends
+  idempotent either way. Check `openclaw cron runs` after the first real evening.

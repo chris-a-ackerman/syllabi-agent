@@ -1,4 +1,4 @@
-<!-- Maritime cron trigger: prep — 19:00 America/New_York daily. Everything below the line is the exact prompt text. -->
+<!-- OpenClaw cron job (America/New_York, see README.md): prep — 19:00 America/New_York daily. Everything below the line is the exact prompt text. -->
 ---
 [trigger: prep]
 

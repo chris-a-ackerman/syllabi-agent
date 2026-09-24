@@ -8,7 +8,7 @@ write JSON.
 
 Fallback if spawning a no-tool agent is not possible on the deployed template: call the bundled
 `llm-task` tool with the same prompt as `prompt`, the input bundle as `input`, and
-`memory/brief.schema.json` as `schema`.
+`memory-templates/brief.schema.json` as `schema`.
 
 ## Role
 
@@ -67,11 +67,11 @@ Nothing else: no prep-log, no secrets, no other sessions.
 
 ## Output contract
 
-Strict JSON that validates against `memory/brief.schema.json`.
+Strict JSON that validates against `memory-templates/brief.schema.json`.
 
 ## Validation (done by the main agent, not the subagent)
 
-1. `JSON.parse`, then validate against `memory/brief.schema.json`. On failure, re-prompt **once**
+1. `JSON.parse`, then validate against `memory-templates/brief.schema.json`. On failure, re-prompt **once**
    with the validator errors appended. On a second failure, set the session to `partial` with
    `last_error.code = "BRIEF_SCHEMA_INVALID"`.
 2. For each `pre_class_questions[i].question`, compute a fuzzy ratio (normalized, whitespace-folded,
