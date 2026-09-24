@@ -27,7 +27,7 @@ All commands print one JSON object to stdout. Exit code 0 means `ok: true`. Non-
 | --- | --- |
 | `{baseDir}/scripts/canvas list_modules <course_id>` | `{ok, modules: [{id, name, position, items: [{id, title, type, content_id?, page_url?, external_url?}]}]}` |
 | `{baseDir}/scripts/canvas list_files <course_id> [--folder <path>]` | `{ok, files: [{id, display_name, filename, size, content_type, updated_at, folder}]}` |
-| `{baseDir}/scripts/canvas download_file <file_id> <dest_dir>` | `{ok, file_id, local_path, bytes, sha256}`. `dest_dir` must be under `/data/readings/`. Skips the download if a file with the same sha256 is already present. |
+| `{baseDir}/scripts/canvas download_file <file_id> <dest_dir>` | `{ok, file_id, local_path, bytes, sha256, skipped}`. `dest_dir` must be under `/data/readings/`. Skips the download (`skipped: true`) if a file with the same sha256 is already present. |
 | `{baseDir}/scripts/canvas upcoming_assignments <course_id> [--days N]` | `{ok, assignments: [{id, name, due_at, html_url, description_text, submission_types[]}]}` |
 | `{baseDir}/scripts/canvas get_page <course_id> <page_url>` | `{ok, page: {url, title, body_text, updated_at}}` |
 
