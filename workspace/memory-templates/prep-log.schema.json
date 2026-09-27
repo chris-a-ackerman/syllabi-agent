@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://class-prep-agent.local/schemas/prep-log.schema.json",
+  "title": "class-prep-agent prep log",
+  "description": "Durable state for /data/memory/prep-log.json. One record per (course, class_date), keyed '<course>@<YYYY-MM-DD>'. Read at the start of every run, written at the end.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "sessions"],
+  "properties": {
+    "version": { "const": 1 },
+    "updated_at": { "type": "string", "format": "date-time" },
+    "sessions": {
+      "type": "object",
+      "propertyNames": { "pattern": "^[^@\\s]+@\\d{4}-\\d{2}-\\d{2}$" },
+      "additionalProperties": { "$ref": "#/$defs/session" }
+    }
+  },
+  "$defs": {
+    "status": {
+      "enum": ["pending", "podcast-pending", "ready", "done", "partial", "needs-human"]
+    },
+    "trigger": {
+      "enum": ["prep", "poll", "notify", "human", "manual"],
+      "description": "What started the run. 'human' = a Telegram reply from Chris; 'manual' = operator/eval run."
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "description": "Tool error code (see docs/tool-contract.md), e.g. NLM_AUTH, CANVAS_403, BRIEF_SCHEMA_INVALID, TOOL_BUDGET, READING_LIST_CONFLICT, NEEDS_OWN_ANSWER."
+        },
+        "message": { "type": "string" },
+        "at": { "type": "string", "format": "date-time" },
+        "step": { "enum": ["syllabus", "readings", "drive", "podcast", "brief", "notify"] }
+      }
+    },
+    "reading": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "source", "id_or_url"],
+      "properties": {
+        "title": { "type": "string", "minLength": 1 },
+        "source": { "enum": ["canvas_file", "external"] },
+        "id_or_url": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Canvas file id for canvas_file, URL for external."
+        },
+        "local_path": {
+          "type": "string",
+          "pattern": "^/data/readings/",
+          "description": "Set once downloaded."
+        },
+        "drive_path": { "type": "string", "description": "Set once uploaded (Readings/<course>/<date>/<file>)." },
+        "requires_login": { "type": "boolean", "description": "True if the link was behind a login / 403." },
+        "truncated_for_brief": { "type": "boolean" }
+      }
+    },
+    "history_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ts", "trigger", "action"],
+      "properties": {
+        "ts": { "type": "string", "format": "date-time" },
+        "trigger": { "$ref": "#/$defs/trigger" },
+        "action": {
+          "type": "string",
+          "description": "Short verb phrase, e.g. 'downloaded 2 readings', 'nlm-prep started', 'asked human: login required', 'brief sent'."
+        },
+        "detail": { "type": "string" }
+      }
+    },
+    "session": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["course", "class_date", "readings", "drive_paths", "notify_at", "status", "attempts", "history"],
+      "properties": {
+        "course": { "type": "string", "minLength": 1, "description": "Course code, e.g. MAS.665." },
+        "class_date": { "type": "string", "format": "date", "description": "ET calendar date of the class." },
+        "class_start": { "type": "string", "format": "date-time", "description": "Class start with ET offset." },
+        "canvas_course_id": { "type": ["string", "integer"] },
+        "topic": { "type": "string" },
+        "has_due_before_class": {
+          "type": "boolean",
+          "description": "True if something is due before class; drives notify_at = class_start - 24h."
+        },
+        "readings": { "type": "array", "items": { "$ref": "#/$defs/reading" } },
+        "drive_paths": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Drive paths (or share links) for this session's uploads."
+        },
+        "notebook_id": {
+          "type": "string",
+          "description": "Set by nlm-prep. If present, NEVER start another podcast for this session."
+        },
+        "podcast_url": { "type": "string", "description": "Drive share link to the mp3, set by nlm-status when ready." },
+        "brief": { "$ref": "brief.schema.json" },
+        "notify_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When to send the brief: class_start - 24h if something is due, else 06:30 ET on class day."
+        },
+        "brief_sent_at": { "type": "string", "format": "date-time", "description": "Guard against duplicate brief sends." },
+        "podcast_sent_at": { "type": "string", "format": "date-time", "description": "Guard against duplicate podcast-link sends." },
+        "status": { "$ref": "#/$defs/status" },
+        "attempts": { "type": "integer", "minimum": 0, "description": "Runs that worked on this session. Stop at 3." },
+        "last_error": { "$ref": "#/$defs/error" },
+        "history": { "type": "array", "items": { "$ref": "#/$defs/history_entry" } }
+      }
+    }
+  }
+}
