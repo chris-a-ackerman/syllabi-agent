@@ -24,8 +24,8 @@ maritime status class-prep-repo
 Run: git clone -b main https://github.com/chris-a-ackerman/syllabi-agent.git /data/syllabi-agent
 ```
 
-Use this chat because `git clone` can take longer than the 30 s reply budget. Over `maritime chat`
-it came back as a garbage reply and the clone never finished. The repo is public, so no token is needed.
+Use this chat, not `maritime chat`: a reply that doesn't come back normally (here, the agent was
+waiting for `/approve`) shows up over `maritime chat` as junk text, and the clone never ran. The repo is public, so no token is needed.
 Before this PR is merged, use `-b claude/class-prep-agent-scaffold-86anxm`. After it merges, switch with
 `Run: cd /data/syllabi-agent && git fetch && git checkout main && git pull`.
 To update later: `Run: cd /data/syllabi-agent && git pull`.
@@ -79,10 +79,24 @@ Run: sh /data/syllabi-agent/scripts/install-jobs.sh
 **Check**: `maritime triggers list class-prep-repo` shows the cron trigger, and `openclaw cron list`
 shows the five `class-prep-*` jobs with `America/New_York`.
 
-## 6. Still to do
+## 6. Subagent config (agent chat)
 
-- Merge the subagent settings from `config/openclaw.example.json5` into `~/.openclaw/openclaw.json`
-  (back it up first; Maritime keeps an `openclaw.json.last-good`), then test `sessions_spawn`.
+```
+Run: cp ~/.openclaw/openclaw.json /data/openclaw.json.pre-subagent
+Run: cd /data/syllabi-agent && openclaw config patch --file config/openclaw.example.json5 --dry-run
+Run: cd /data/syllabi-agent && openclaw config patch --file config/openclaw.example.json5 && openclaw config validate
+```
+Then `maritime restart class-prep-repo`. The change survives the restart.
+
+**Check** (from the terminal; the file trick avoids a junk reply while the child runs):
+```
+maritime chat class-prep-repo "Use sessions_spawn with agentId \"brief-writer\", mode \"run\", context \"isolated\", and this task: \"Reply with a JSON array of the exact names of every tool you can call, and nothing else. If you have none, reply [].\" Write the child's reply verbatim to /data/spawn-test.txt." --json
+maritime chat class-prep-repo "Run: cat /data/spawn-test.txt" --json
+```
+Expected: `[]`. To undo: `cp /data/openclaw.json.pre-subagent ~/.openclaw/openclaw.json`, then restart.
+
+## 7. Still to do
+
 - Check the V2–V4 tooling: `python3`, `pip`, `notebooklm-py`, `rclone`, and whether installs
   survive a restart.
 - Upload secrets to `/data/secrets/` and `/data/rclone/`, and set the environment variables with
@@ -90,7 +104,7 @@ shows the five `class-prep-*` jobs with `America/New_York`.
 
 ---
 
-## Verification log (2026-09-24)
+## Verification log (2026-09-24 and 2026-09-27)
 
 These are the evidence for the writeup. Each row is something we tested, not something we assumed.
 
@@ -108,6 +122,13 @@ These are the evidence for the writeup. Each row is something we tested, not som
 | Maritime trigger `8 18 * * *` (UTC) + OpenClaw job at 14:08 ET, agent asleep | logs show a bare wake at 18:08 UTC; the job ran; the message arrived |
 | Maritime trigger `*/5 * * * *` | accepted; woke the agent every 5 minutes |
 | `maritime triggers create --help` | only `--type` and `--cron`: no prompt, no timezone |
+| Two one-time jobs at 16:55 ET, each running a 45 s script (09-27) | serialized: A 20:55:04–20:55:49, B 20:55:57–20:56:42 UTC |
+| `config patch` with `agents.entries` (09-27) | rejected: "agents: Unrecognized key: entries" (2026.7.1 uses `agents.list`) |
+| `brief-writer` with a hand-written tool deny list (09-27) | child still had tools |
+| `brief-writer` with `profile: "minimal", deny: ["*"]` (09-27) | child reported `[]` |
+| `openclaw.json` after `maritime restart` (09-27) | patch kept; `last-good` updated to the new file |
+| `CANVAS_*` set, "what readings are on Canvas for MAS.665?" (09-27) | used the canvas skill, reported missing `scripts/canvas`; did not call OpenClaw's `canvas` tool |
+| Restart log (09-27) | "Captured derived image v4 (restart). Edits will survive restart" |
 
 ### Gotchas we hit
 
@@ -117,5 +138,10 @@ These are the evidence for the writeup. Each row is something we tested, not som
   It's in `.gitignore`.
 - `maritime deploy --source github` builds from a Dockerfile in the repo. This repo has none, so
   don't use it.
-- Replies that time out (long commands) can come back as unrelated text or "No output". The
-  command may or may not have finished, so check the result with a second, quick command.
+- Over `maritime chat`, a reply that doesn't come back normally shows up as unrelated text
+  ("node-inspect-debugger") or "No output". Seen while the agent waited for `/approve` and during a
+  `sessions_spawn` run. Have the agent write results to a file and read it with a second message.
+- Current OpenClaw docs are newer than the 2026.7.1 the template runs; read them at tag `v2026.7.1`.
+- `openclaw cron add --at ...` rejects `--exact` (cron schedules only).
+- Don't deny subagent tools by listing them: sub-agents also get session, memory, goal, plugin and
+  MCP tools. Use `deny: ["*"]`.

@@ -67,8 +67,10 @@ Every job is created with `--tz America/New_York --exact --session isolated --no
 
 Each prompt file's text below its `---` line is the exact job prompt.
 
-## Still open
+## Overlapping runs (verified 2026-09-27)
 
-- **Overlapping runs.** If `prep` is still running at 19:30, can `poll` start alongside it?
-  OpenClaw queues runs into execution lanes, and the prep-log `*_sent_at` guards make sends
-  idempotent either way. Check `openclaw cron runs` after the first real evening.
+Cron runs are serialized. Two one-time jobs due at the same minute, each running a 45 s script,
+ran one after the other: A 20:55:04–20:55:49, B 20:55:57–20:56:42 (UTC). So if `prep` is still
+running at 19:30, that poll waits for it. The `*_sent_at` guards make sends idempotent anyway.
+
+When testing one-time jobs, note that `--exact` is only valid for cron schedules, not with `--at`.

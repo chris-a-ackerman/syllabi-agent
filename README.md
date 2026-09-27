@@ -102,8 +102,8 @@ Timing: **24 hours before class** if something is due beforehand, **morning-of**
   cron jobs, workspace) persists too. All memory files, logs, secrets (NotebookLM cookies, rclone
   config), downloaded readings and podcasts go under `/data`.
 - **30-second chat reply budget, 60 s default command timeout.** Long work runs in the background,
-  so podcast generation is *started* in one run and *polled* by a later one. A `git clone` that ran
-  past the budget came back as a garbage reply during deploy.
+  so podcast generation is *started* in one run and *polled* by a later one. Over `maritime chat`,
+  a reply that doesn't finish in time comes back as junk (see Deploy findings).
 - **The model is GPT-5.4** through Maritime's LLM proxy by default (no API key needed).
 - 2 GB RAM / 5 GB SSD base; 100 MB per file transfer.
 
@@ -193,7 +193,7 @@ Cases table: [`evidence/eval/cases.md`](evidence/eval/cases.md).
 
 ---
 
-## Deploy findings (verified 2026-09-24)
+## Deploy findings (verified 2026-09-24 and 2026-09-27)
 
 The scaffold was written without access to Maritime's docs. These are the answers from the first
 deploy. The full runbook is in [`docs/deploy-maritime.md`](docs/deploy-maritime.md).
@@ -204,13 +204,16 @@ deploy. The full runbook is in [`docs/deploy-maritime.md`](docs/deploy-maritime.
 | 2 | Where the workspace lives | ✅ `/data/.openclaw/workspace`. It's unconfirmed whether the template uses `--repo`/`--branch` (the test pointed at `main`, which doesn't have these files yet), so we clone the repo to `/data/syllabi-agent` and run `scripts/install-workspace.sh`. Maritime writes `MARITIME.md` and a block at the top of `AGENTS.md` there, so we merge rather than repoint the workspace. |
 | 3 | Trigger timezone | ✅ OpenClaw jobs take `--tz America/New_York`. Maritime CLI triggers are UTC with no prompt, which is fine for an every-30-minutes wake. |
 | 4 | Minimum interval | ✅ `*/5` was accepted and fired, so `*/30` is fine. |
-| 5 | Concurrency | ⏳ Open. The `*_sent_at` guards make sends idempotent regardless. |
-| 6 | Subagents | ⏳ Open. The generated `openclaw.json` has no `agents.entries`. Merge `config/openclaw.example.json5` and test `sessions_spawn`. |
-| 7 | `canvas` name clash | ⏳ Open. It will show up once the canvas skill is implemented. |
+| 5 | Concurrency | ✅ Cron runs are serialized. Two jobs due in the same minute ran one after the other (A 20:55:04–20:55:49, B 20:55:57–20:56:42), so `prep` and `poll` can't clobber `prep-log.json`; a long `prep` only delays the next poll. Not covered: a Telegram reply from Chris during a job runs in its own session. |
+| 6 | Subagents | ✅ `brief-writer` has zero tools: spawned via `sessions_spawn`, it reported `[]`. It needed two fixes to `config/openclaw.example.json5`: OpenClaw 2026.7.1 wants an `agents.list` array (with `main` marked `default`), not `agents.entries`, and a hand-written deny list left tools behind, so it now uses `deny: ["*"]`. |
+| 7 | `canvas` name clash | ✅ With `CANVAS_*` set, the skill is eligible, and "what readings are on Canvas?" went to the canvas **skill** (which reported the missing `scripts/canvas`), not OpenClaw's `canvas` tool. No rename needed. Re-check once the V2 script lands. |
 | new | Schedule sync | ❌ Maritime's docs say it mirrors `~/.openclaw/cron/jobs.json`, but OpenClaw 2026.6.1+ stores jobs in SQLite, so nothing is mirrored. Fixed with an explicit `*/30` wake trigger. |
 | new | Exec approvals | The model (GPT-5.4) asked Chris to `/approve` network commands although the policy was `security=full, ask=off`. Fixed with the "Command execution (pre-authorized)" section in `AGENTS.md`. |
 | new | Telegram from a cron run | A normal reply goes nowhere. Use `maritime-telegram-send` (verified). |
-| new | Slow commands | A `git clone` that ran past the 30 s reply budget returned a garbage reply ("node-inspect-debugger"). Run slow work in the background. |
+| new | Junk chat replies | Over `maritime chat`, a reply that doesn't come back normally shows up as unrelated text ("node-inspect-debugger") or "No output". It happened while the agent waited for `/approve` and during a `sessions_spawn` run. Workaround: have the agent write results to a file and read it with a second quick message, or use the dashboard chat. |
+| new | OpenClaw version | The template runs OpenClaw 2026.7.1. Current OpenClaw docs describe newer schemas (`agents.entries`, which 2026.7.1 rejects). Check the docs at tag `v2026.7.1`. |
+| new | Config persistence | `openclaw config patch` changes survive `maritime restart`; Maritime does not regenerate `openclaw.json`. |
+| new | Filesystem persistence | On restart Maritime logs "Captured derived image … Edits will survive restart", so installs outside `/data` should persist too. Confirm with the first V2 install. |
 
 Still to check before V2: whether `python3`, `pip`, `notebooklm-py` and `rclone` are available, and
-whether installs survive a restart (anything installed outside `/data` may not).
+that an install survives a restart.
