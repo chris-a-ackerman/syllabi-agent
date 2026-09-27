@@ -35,13 +35,13 @@
         id: "brief-writer",
         workspace: "~/.openclaw/workspace-brief-writer",
         skills: [],
+        // Deny EVERYTHING. `*` is a supported wildcard and deny always wins. The first version
+        // listed built-in tools one by one, and the spawned child still had tools: sub-agents
+        // also get session/goal/memory tools plus plugin and MCP tools (e.g. Maritime's
+        // Browserbase server) that a hand-written list misses. `minimal` is belt and braces.
         tools: {
-          deny: [
-            "read", "write", "edit", "apply_patch", "exec", "process",
-            "browser", "web_fetch", "web_search", "canvas", "nodes",
-            "cron", "gateway", "image", "message",
-            "sessions_spawn", "sessions_send", "subagents",
-          ],
+          profile: "minimal",
+          deny: ["*"],
         },
       },
     ],
