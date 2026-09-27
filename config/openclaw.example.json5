@@ -1,11 +1,16 @@
-// Settings to MERGE into ~/.openclaw/openclaw.json (= /data/.openclaw/openclaw.json on Maritime).
-// Keys follow the OpenClaw docs (gateway/config-agents, tools/subagents/tool-policy).
+// Settings to MERGE into ~/.openclaw/openclaw.json (= /data/.openclaw/openclaw.json on Maritime):
+//   openclaw config patch --file /data/syllabi-agent/config/openclaw.example.json5 --dry-run
 //
-// Verified 2026-09-24: Maritime generates this file. It sets gateway auth, the model
-// (openai/gpt-5.4 via https://api.maritime.sh/api/llm/v1), a Browserbase MCP server,
-// tools.deny ["browser"] and browser.enabled false. It has NO agents.entries, so the subagent
-// settings below are still untested. Back up first (Maritime also keeps openclaw.json.last-good),
-// merge by hand, restart, and check the file wasn't reverted.
+// Schema is for OpenClaw 2026.7.1, the version Maritime's template runs. That version uses an
+// `agents.list` ARRAY. The keyed `agents.entries` map in current OpenClaw docs is newer, and
+// 2026.7.1 rejects it ("agents: Unrecognized key: entries").
+// `main` must be in the list and marked default: with only brief-writer listed, OpenClaw would
+// treat the first entry as the default agent.
+//
+// Maritime generates the rest of this file: gateway auth, the model (openai/gpt-5.4 via
+// https://api.maritime.sh/api/llm/v1), a Browserbase MCP server, tools.deny ["browser"] and
+// browser.enabled false. Back it up first (Maritime also keeps openclaw.json.last-good), and
+// after a restart check that the change wasn't reverted.
 //
 // Exec policy is already security=full, ask=off (`openclaw approvals get`); nothing to set here.
 {
@@ -18,13 +23,16 @@
       skipBootstrap: true,
       subagents: { maxConcurrent: 1, maxSpawnDepth: 1 },
     },
-    entries: {
-      main: {
+    list: [
+      {
+        id: "main",
+        default: true,
         subagents: { allowAgents: ["brief-writer"], requireAgentId: true },
       },
       // Tool-less brief writer. Its own workspace only needs a tiny AGENTS.md
       // (or none): the full instructions travel in the sessions_spawn task.
-      "brief-writer": {
+      {
+        id: "brief-writer",
         workspace: "~/.openclaw/workspace-brief-writer",
         skills: [],
         tools: {
@@ -36,9 +44,10 @@
           ],
         },
       },
-    },
+    ],
   },
-  // Only needed if brief-writer is run through llm-task instead of sessions_spawn.
-  plugins: { entries: { "llm-task": { enabled: true } } },
-  tools: { alsoAllow: ["llm-task"] },
+  // Fallback only, if sessions_spawn doesn't work out: run brief-writer through llm-task.
+  // Uncomment both lines, and note that `tools.alsoAllow` replaces any existing array.
+  // plugins: { entries: { "llm-task": { enabled: true } } },
+  // tools: { alsoAllow: ["llm-task"] },
 }
