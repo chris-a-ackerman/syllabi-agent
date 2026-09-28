@@ -1,4 +1,4 @@
-"""Tests for workspace/skills/preplog/scripts/preplog.py (SYL-102): the memory tool.
+"""Tests for workspace/skills/preplog/scripts/preplog.py (SYL-100, memory half): the memory tool.
 
 Everything runs against a temp DATA_DIR. No network, no Maritime. The clock is fixed by replacing
 the module's `now_utc` hook (and `read_stdin` for `-` inputs).
@@ -120,7 +120,9 @@ class PrepLogTestCase(unittest.TestCase):
     def session(self, key=KEY):
         return self.doc()["sessions"][key]
 
-    def make(self, key=KEY, *extra, due=False, class_start=CLASS_START):
+    def make(self, key=KEY, *extra, due=False, class_start=None):
+        if class_start is None:   # 13:00 ET on the key's date (upsert refuses a start on another day)
+            class_start = "%sT13:00:00-04:00" % key.split("@", 1)[1]
         argv = ["--trigger", "prep", "upsert", key, "--class-start", class_start, "--canvas-course-id", "40577"]
         if due:
             argv += ["--has-due-before-class", "true"]
@@ -609,7 +611,7 @@ class MarkSentTests(PrepLogTestCase):
         self.ok("set-notebook", KEY, "nb1")
         body = self.ok("--trigger", "notify", "mark-sent", KEY, "brief")
         self.assertEqual(body["brief_sent_at"], NOW)
-        self.assertEqual(body["status"], "podcast-pending")       # unchanged: no link yet
+        self.assertEqual(body["status"], "notified-partial")      # brief out, podcast link owed
         self.assertEqual(self.session()["history"][-1]["detail"], "podcast pending")
         self.assertError(self.run_cli("mark-sent", KEY, "brief"), "ALREADY_SENT")
         self.assertError(self.run_cli("mark-sent", KEY, "podcast"), "USAGE")   # no podcast_url yet
@@ -1066,6 +1068,209 @@ class CliTests(PrepLogTestCase):
         self.assertTrue(os.path.islink(link))
         self.assertEqual(os.readlink(link), "preplog.py")
         self.assertTrue(os.access(os.path.join(SCRIPTS, "preplog.py"), os.X_OK))
+
+
+# --------------------------------------------------------------------------- SYL-100 fixes (PR #7 review)
+
+
+class NotifiedPartialTests(PrepLogTestCase):
+    """The brief goes out before the podcast is ready: notified-partial -> poll -> done."""
+
+    def test_status_is_in_the_schema_and_the_tool(self):
+        with open(os.path.join(TEMPLATES, "prep-log.schema.json"), encoding="utf-8") as fh:
+            enum = json.load(fh)["$defs"]["status"]["enum"]
+        self.assertEqual(enum, ["pending", "podcast-pending", "ready", "notified-partial", "done", "partial",
+                                "needs-human"])
+        self.assertEqual(list(preplog.STATUSES), enum)
+        self.assertIn("notified-partial", preplog.PREP_SKIP_STATUSES)
+
+    def test_full_path_notify_partial_then_poll_then_done(self):
+        key = "A@2026-09-28"
+        self.make(key, "--notify-at", "2026-09-27T13:00:00-04:00")
+        self.ok("set-brief", key, "--from", self.write_json("b.json", brief()))
+        self.ok("set-notebook", key, "nbA")
+        # notify: the brief is due, the podcast is not ready
+        due = self.ok("--trigger", "notify", "due")
+        self.assertEqual([b["key"] for b in due["briefs"]], [key])
+        body = self.ok("--trigger", "notify", "mark-sent", key, "brief")
+        self.assertEqual(body["status"], "notified-partial")
+        self.assertEqual(self.session(key)["history"][-1]["action"], "brief sent without podcast link")
+        # prep skips it; begin counts no attempt
+        begin = self.ok("--trigger", "prep", "begin", key)
+        self.assertTrue(begin["skip"])
+        self.assertEqual(begin["reason"], "status:notified-partial")
+        self.assertEqual(self.session(key)["attempts"], 0)
+        # poll: the notebook is still polled, no brief is due again, no link yet
+        due = self.ok("--trigger", "poll", "due")
+        self.assertEqual(due["briefs"], [])
+        self.assertEqual(due["podcast_links"], [])
+        self.assertEqual([p["key"] for p in due["podcast_pending"]], [key])
+        # poll: nlm-status says ready -> record it; status stays notified-partial, link only is owed
+        self.set_now("2026-09-27T19:30:00-04:00")
+        body = self.ok("--trigger", "poll", "set-podcast", key, "--url", "https://drive.google.com/a.mp3")
+        self.assertEqual(body["status"], "notified-partial")
+        self.assertEqual(body["send"], "podcast-link-only")
+        due = self.ok("--trigger", "poll", "due")
+        self.assertEqual(due["briefs"], [])
+        self.assertEqual(due["podcast_pending"], [])
+        self.assertEqual(due["podcast_links"], [{"key": key, "status": "notified-partial",
+                                                 "podcast_url": "https://drive.google.com/a.mp3",
+                                                 "send": "podcast-link-only"}])
+        self.assertError(self.run_cli("mark-sent", key, "brief"), "ALREADY_SENT")
+        body = self.ok("--trigger", "poll", "mark-sent", key, "podcast")
+        self.assertEqual(body["status"], "done")
+        due = self.ok("--trigger", "poll", "due")
+        self.assertTrue(due["nothing_to_do"])
+        self.assertEqual(self.ok("validate")["sessions"], 1)
+
+    def test_set_notebook_does_not_undo_a_sent_brief(self):
+        key = "A@2026-09-28"
+        self.make(key, "--notify-at", "2026-09-27T13:00:00-04:00")
+        self.ok("mark-sent", key, "brief")
+        self.assertEqual(self.ok("set-notebook", key, "nbA")["status"], "notified-partial")
+
+    def test_list_filter_accepts_it(self):
+        key = "A@2026-09-28"
+        self.make(key, "--notify-at", "2026-09-27T13:00:00-04:00")
+        self.ok("mark-sent", key, "brief")
+        self.assertEqual(self.ok("list", "--status", "notified-partial")["count"], 1)
+
+
+class NoOpUpsertTests(PrepLogTestCase):
+    """Eval case 4: an already-prepped session costs no writes."""
+
+    @staticmethod
+    def digest(path):
+        import hashlib
+        with open(path, "rb") as fh:
+            return hashlib.sha256(fh.read()).hexdigest()
+
+    def test_repeat_upsert_changes_nothing(self):
+        self.make(KEY, "--topic", "Agents", due=True)
+        before, mtime = self.digest(self.prep_log), os.stat(self.prep_log).st_mtime_ns
+        self.set_now("2026-09-28T19:00:00-04:00")       # a day later: updated_at would move if we wrote
+        body = self.make(KEY, "--topic", "Agents", due=True)
+        self.assertFalse(body["created"])
+        self.assertFalse(body["changed"])
+        self.assertEqual(self.digest(self.prep_log), before)
+        self.assertEqual(os.stat(self.prep_log).st_mtime_ns, mtime)
+
+    def test_repeat_upsert_on_a_done_record_changes_nothing(self):
+        self.make()
+        self.ok("set-podcast", KEY, "--url", "https://drive.google.com/p.mp3")
+        self.ok("mark-sent", KEY, "brief", "--podcast-included")
+        before = self.digest(self.prep_log)
+        self.assertFalse(self.make()["changed"])
+        self.assertTrue(self.ok("begin", KEY)["skip"])
+        self.ok("get", KEY)
+        self.ok("list")
+        self.assertEqual(self.digest(self.prep_log), before)
+
+    def test_a_real_change_is_written(self):
+        self.make()
+        before = self.digest(self.prep_log)
+        body = self.make(KEY, "--topic", "New")
+        self.assertTrue(body["changed"])
+        self.assertNotEqual(self.digest(self.prep_log), before)
+
+
+class ResetAttemptsTests(PrepLogTestCase):
+    def exhaust(self):
+        self.make()
+        for _ in range(3):
+            self.ok("begin", KEY)
+        self.ok("begin", KEY)                       # -> needs-human, MAX_ATTEMPTS
+
+    def test_human_reset_gives_three_fresh_attempts(self):
+        self.exhaust()
+        body = self.ok("--trigger", "human", "set-status", KEY, "pending", "--reset-attempts")
+        self.assertEqual(body["attempts"], 0)
+        self.assertIsNone(body["last_error"])
+        s = self.session()
+        self.assertEqual(s["status"], "pending")
+        self.assertEqual(s["history"][-1]["action"], "status needs-human → pending, attempts reset (was 3)")
+        self.assertEqual(s["history"][-1]["trigger"], "human")
+        begin = self.ok("--trigger", "prep", "begin", KEY)
+        self.assertFalse(begin["skip"])              # no instant MAX_ATTEMPTS, no second ping to Chris
+        self.assertEqual(begin["attempts"], 1)
+
+    def test_reset_is_refused_for_cron_triggers_and_other_statuses(self):
+        self.exhaust()
+        for trig in ("prep", "poll", "notify"):
+            self.assertError(self.run_cli("--trigger", trig, "set-status", KEY, "pending", "--reset-attempts"), "USAGE")
+        self.assertError(self.run_cli("--trigger", "human", "set-status", KEY, "partial", "--reset-attempts"), "USAGE")
+        self.assertEqual(self.session()["attempts"], 3)
+        self.ok("--trigger", "manual", "set-status", KEY, "pending", "--reset-attempts")
+        self.assertEqual(self.session()["attempts"], 0)
+
+
+class FromJsonGuardTests(PrepLogTestCase):
+    def test_guarded_fields_are_refused(self):
+        self.make()
+        self.ok("set-notebook", KEY, "nb1")
+        before = self.raw()
+        err = self.assertError(self.run_cli("upsert", KEY, "--from-json",
+                                            self.write_json("p.json", {"notebook_id": "nb2"})), "USAGE")
+        self.assertIn("set-notebook", err["message"])
+        self.assertEqual(self.raw(), before)
+        self.assertEqual(self.session()["notebook_id"], "nb1")
+        patches = ({"status": "pending"}, {"brief_sent_at": NOW}, {"podcast_sent_at": NOW},
+                   {"podcast_url": "https://x"}, {"brief": brief()}, {"last_error": {"code": "X", "message": "x"}})
+        for patch in patches:
+            self.assertError(self.run_cli("upsert", KEY, "--from-json", self.write_json("p.json", patch)), "USAGE")
+        self.assertEqual(self.raw(), before)
+
+
+class NotifyAtRecomputeTests(PrepLogTestCase):
+    def test_changed_class_start_moves_a_computed_notify_at(self):
+        self.make(due=True)
+        self.assertEqual(self.session()["notify_at"], "2026-09-28T13:00:00-04:00")
+        s = self.make(KEY, due=True, class_start="2026-09-29T15:00:00-04:00")["session"]
+        self.assertEqual(s["notify_at"], "2026-09-28T15:00:00-04:00")
+        self.assertEqual(s["history"][-1]["action"],
+                         "notify_at 2026-09-28T13:00:00-04:00 → 2026-09-28T15:00:00-04:00")
+
+    def test_changed_has_due_moves_it_both_ways(self):
+        self.make()
+        self.assertEqual(self.session()["notify_at"], "2026-09-29T06:30:00-04:00")
+        self.make(KEY, "--has-due-before-class", "true")
+        self.assertEqual(self.session()["notify_at"], "2026-09-28T13:00:00-04:00")
+        self.make(KEY, "--has-due-before-class", "false")
+        self.assertEqual(self.session()["notify_at"], "2026-09-29T06:30:00-04:00")
+
+    def test_explicit_notify_at_wins_and_is_kept_when_inputs_do_not_change(self):
+        self.make(KEY, "--notify-at", "2026-09-28T20:00:00-04:00")
+        self.make(KEY, "--topic", "x")
+        self.assertEqual(self.session()["notify_at"], "2026-09-28T20:00:00-04:00")
+        self.make(KEY, "--notify-at", "2026-09-28T21:00:00-04:00", due=True)
+        self.assertEqual(self.session()["notify_at"], "2026-09-28T21:00:00-04:00")
+
+
+class ReviewNitTests(PrepLogTestCase):
+    def test_class_start_on_another_day_is_refused(self):
+        self.assertError(self.run_cli("upsert", KEY, "--class-start", "2026-09-30T13:00:00-04:00"), "USAGE")
+        # 01:00Z on the 30th is 21:00 ET on the 29th: the ET date is what counts.
+        self.assertFalse(os.path.exists(self.prep_log))
+        self.assertEqual(self.ok("upsert", KEY, "--class-start", "2026-09-30T01:00:00Z")["session"]["class_start"],
+                         "2026-09-29T21:00:00-04:00")
+
+    def test_reads_create_neither_memory_dir_nor_lock(self):
+        for argv in (["list"], ["due"], ["validate"], ["get", KEY], ["notes", "get"]):
+            self.run_cli(*argv)
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "memory")))
+        self.make()
+        lock = self.prep_log + ".lock"
+        os.unlink(lock)
+        for argv in (["list"], ["due"], ["validate"], ["get", KEY]):
+            self.ok(*argv)
+        self.assertFalse(os.path.exists(lock))
+
+    def test_memory_files_are_private(self):
+        self.ok("init")
+        self.make()
+        self.ok("notes", "set", "--course", "MAS.665", "--field", "readings", "--value", "Canvas modules")
+        for path in (self.prep_log, self.notes):
+            self.assertEqual(os.stat(path).st_mode & 0o777, 0o600, path)
 
 
 if __name__ == "__main__":

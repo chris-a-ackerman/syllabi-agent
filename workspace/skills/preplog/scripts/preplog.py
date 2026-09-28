@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""preplog: the agent's durable memory as a tool (SYL-102).
+"""preplog: the agent's durable memory as a tool (SYL-100, memory half).
 
     preplog [--now ISO] [--trigger T] <command> ...
 
@@ -15,7 +15,9 @@
     set-podcast <key> --url URL             record the podcast link (podcast-pending -> ready)
     set-brief <key> --from FILE|-           validate against brief.schema.json and store the brief
     set-status <key> <status> [...]         move the state machine, with an optional last_error
+                                            (`pending --reset-attempts` after Chris replies)
     mark-sent <key> brief|podcast           set the *_sent_at guards; refuses a second send
+                                            (brief without the podcast link -> notified-partial)
     log <key> --action A [--detail D]       append a history entry
     due                                     what the send pass must do now (poll / notify)
     runlog ...                              append a run-log block to /data/logs/<ET date>-<trigger>.md
@@ -35,8 +37,11 @@ What it guards (AGENTS.md hard rules 3 and 4, "Session state machine", "Send pas
       session never leaves a half-written or invalid file.
     * `set-notebook` refuses a second notebook id (never start a second podcast).
     * `mark-sent` refuses a second brief / podcast-link send (the *_sent_at guards).
-    * `begin` applies the stop rules: skip podcast-pending / ready / done / needs-human records,
-      count attempts, and turn the third attempt into needs-human with last_error MAX_ATTEMPTS.
+    * `begin` applies the stop rules: skip podcast-pending / ready / notified-partial / done /
+      needs-human records, count attempts, and turn the third attempt into needs-human with
+      last_error MAX_ATTEMPTS.
+    * `upsert` changes nothing (no write at all) when the facts it is given are already recorded,
+      and `--from-json` cannot touch the guarded fields (notebook, status, sends, podcast, brief).
     * `get` / `begin` list the steps a record still needs, so a recorded step is never redone.
     * `due` selects the send pass deterministically (notify_at <= now, guards unset).
     * `runlog` writes the run-log block in the AGENTS.md format under the Eastern-time date.
@@ -82,11 +87,21 @@ PREP_LOG_SCHEMA = "prep-log.schema.json"
 BRIEF_SCHEMA = "brief.schema.json"
 COURSE_NOTES_TEMPLATE = "course-notes.md"
 
-STATUSES = ("pending", "podcast-pending", "ready", "done", "partial", "needs-human")
+# Order and values match V8 (SYL-100). notified-partial = the brief went out without the podcast
+# link; only the "🎧 podcast ready" message is still owed.
+STATUSES = ("pending", "podcast-pending", "ready", "notified-partial", "done", "partial", "needs-human")
 TRIGGERS = ("prep", "poll", "notify", "human", "manual")
 ERROR_STEPS = ("syllabus", "readings", "drive", "podcast", "brief", "notify")
 READING_SOURCES = ("canvas_file", "external")
-PREP_SKIP_STATUSES = ("podcast-pending", "ready", "done", "needs-human")
+PREP_SKIP_STATUSES = ("podcast-pending", "ready", "notified-partial", "done", "needs-human")
+# upsert --from-json may not set these: each has its own guarded command.
+PROTECTED_FIELDS = {
+    "history": "preplog log", "attempts": "preplog begin / set-status --reset-attempts",
+    "notebook_id": "preplog set-notebook", "status": "preplog set-status",
+    "brief_sent_at": "preplog mark-sent", "podcast_sent_at": "preplog mark-sent",
+    "podcast_url": "preplog set-podcast", "brief": "preplog set-brief", "last_error": "preplog set-status",
+}
+RESET_TRIGGERS = ("human", "manual")   # who may reset attempts: Chris's reply or the operator
 STEPS = ("find_readings", "download", "drive", "podcast", "brief")
 MAX_ATTEMPTS = 3
 MORNING_NOTIFY = (6, 30)          # 06:30 ET on class day when nothing is due before class
@@ -446,6 +461,8 @@ EMPTY_DOC = {"version": 1, "sessions": {}}
 
 
 def _atomic_write(path, text):
+    """Temp file + rename. mkstemp makes the file 0600, and that is intended: memory is the
+    agent's own, readable only by the user the agent runs as."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=".%s." % os.path.basename(path), suffix=".tmp", dir=os.path.dirname(path))
     try:
@@ -465,17 +482,29 @@ def _atomic_write(path, text):
 class Store:
     """prep-log.json: read, validate, write atomically, under an advisory lock."""
 
-    def __init__(self, cfg, validator):
+    def __init__(self, cfg, validator, readonly=False):
         self.cfg = cfg
         self.validator = validator
+        self.readonly = readonly
         self._lock_fh = None
+
+    def reading(self):
+        """The same store for a read-only command: a shared lock, and it never creates
+        memory/ or the .lock file."""
+        return Store(self.cfg, self.validator, readonly=True)
 
     # -- locking (advisory; cron runs are serialized anyway, a Telegram session is not)
 
     def __enter__(self):
+        lock_path = self.cfg.prep_log + ".lock"
+        if self.readonly:
+            if fcntl is not None and os.path.exists(lock_path):
+                self._lock_fh = open(lock_path, "r")
+                fcntl.flock(self._lock_fh, fcntl.LOCK_SH)
+            return self
         os.makedirs(self.cfg.memory_dir, exist_ok=True)
         if fcntl is not None:
-            self._lock_fh = open(self.cfg.prep_log + ".lock", "a+")
+            self._lock_fh = open(lock_path, "a+")
             fcntl.flock(self._lock_fh, fcntl.LOCK_EX)
         return self
 
@@ -645,7 +674,7 @@ def cmd_init(ctx, args):
 
 
 def cmd_validate(ctx, args):
-    with ctx.store as store:
+    with ctx.store.reading() as store:
         doc = store.load()
         errors = store.check_document(doc)
     if errors:
@@ -655,14 +684,14 @@ def cmd_validate(ctx, args):
 
 
 def cmd_get(ctx, args):
-    with ctx.store as store:
+    with ctx.store.reading() as store:
         doc = store.load()
         s = store.require(doc, args.key)
     return {"key": args.key, "session": s, "plan": plan_for(s)}
 
 
 def cmd_list(ctx, args):
-    with ctx.store as store:
+    with ctx.store.reading() as store:
         doc = store.load()
     wanted = set(args.status or [])
     rows = []
@@ -705,15 +734,16 @@ def cmd_upsert(ctx, args):
             "course": course, "class_date": class_date, "readings": [], "drive_paths": [],
             "status": "pending", "attempts": 0, "history": [],
         }
+        before = json.loads(json.dumps(s))
         if args.from_json:
             patch = _read_json_arg(args.from_json, "--from-json")
             if isinstance(patch, _JsonError):
                 raise usage("--from-json is not valid JSON: %s" % patch.message)
             if not isinstance(patch, dict):
                 raise usage("--from-json must be a JSON object of record fields")
-            for protected in ("history", "attempts"):
-                if protected in patch:
-                    raise usage("--from-json may not set %r; use `preplog log` / `preplog begin`" % protected)
+            for field, command in PROTECTED_FIELDS.items():
+                if field in patch:
+                    raise usage("--from-json may not set %r; use `%s`" % (field, command))
             s.update(patch)
         if args.course:
             s["course"] = clean_text(args.course, 100)
@@ -724,6 +754,11 @@ def cmd_upsert(ctx, args):
                         % (args.key, course, class_date, s.get("course"), s.get("class_date")))
         if args.class_start:
             s["class_start"] = fmt(parse_iso(args.class_start, "--class-start"))
+        if s.get("class_start") != before.get("class_start") and s.get("class_start"):
+            start_date = to_eastern(parse_iso(s["class_start"], "class_start")).date().isoformat()
+            if start_date != class_date:
+                raise usage("class_start %s is on %s (ET), but the key %s is for %s"
+                            % (s["class_start"], start_date, args.key, class_date))
         if args.canvas_course_id is not None:
             cid = args.canvas_course_id.strip()
             s["canvas_course_id"] = int(cid) if cid.isdigit() else clean_text(cid, 100)
@@ -731,23 +766,30 @@ def cmd_upsert(ctx, args):
             s["topic"] = clean_text(args.topic, 500)
         if args.has_due_before_class is not None:
             s["has_due_before_class"] = parse_bool(args.has_due_before_class, "--has-due-before-class")
+        # notify_at: the syllabi skill computes it and passes --notify-at. Without it, fall back to
+        # the AGENTS.md rule when the record has none yet, or when an input to that rule changed.
+        inputs_changed = (s.get("class_start") != before.get("class_start")
+                          or bool(s.get("has_due_before_class")) != bool(before.get("has_due_before_class")))
         if args.notify_at:
             s["notify_at"] = fmt(parse_iso(args.notify_at, "--notify-at"))
-        elif not s.get("notify_at"):
+        elif not s.get("notify_at") or (inputs_changed and not created):
             class_start = stored_time(s, "class_start", args.key)
             if class_start is None and s.get("has_due_before_class"):
                 raise usage("--has-due-before-class needs --class-start to compute notify_at")
-            if class_start is None and not args.class_start and "class_start" not in s:
-                # No class_start at all: 06:30 on class day is still computable.
-                pass
             s["notify_at"] = fmt(compute_notify_at(class_start, bool(s.get("has_due_before_class")),
                                                    parse_date(class_date), cfg.now))
+        changed = created or s != before
+        if not changed:
+            # Nothing new: no write, no history line, no updated_at bump (eval case 4).
+            return {"key": args.key, "created": False, "changed": False, "session": s, "plan": plan_for(s)}
         if created:
             add_history(cfg, s, "record created")
+        elif before.get("notify_at") != s.get("notify_at"):
+            add_history(cfg, s, "notify_at %s → %s" % (before.get("notify_at"), s.get("notify_at")))
         store.check_session(args.key, s)
         doc["sessions"][args.key] = s
         store.save(doc)
-    return {"key": args.key, "created": created, "session": s, "plan": plan_for(s)}
+    return {"key": args.key, "created": created, "changed": True, "session": s, "plan": plan_for(s)}
 
 
 def cmd_begin(ctx, args):
@@ -762,6 +804,7 @@ def cmd_begin(ctx, args):
             result.update({"skip": True, "reason": reason, "attempts": s.get("attempts", 0),
                            "why": {"podcast-pending": "audio in flight; poll advances it",
                                    "ready": "waiting for notify_at; the send pass handles it",
+                                   "notified-partial": "brief sent; only the podcast link is owed (poll)",
                                    "done": "brief and podcast link sent",
                                    "needs-human": "waiting on Chris; retry after his reply clears it"}[status]})
             return result
@@ -851,7 +894,7 @@ def cmd_set_notebook(ctx, args):
             return {"key": args.key, "changed": False, "notebook_id": nid, "status": s.get("status")}
         s["notebook_id"] = nid
         before = s.get("status")
-        if before != "done":
+        if before not in ("done", "notified-partial"):
             s["status"] = "podcast-pending"
         last = s.get("last_error") or {}
         if str(last.get("code", "")).startswith("NLM_"):
@@ -877,9 +920,13 @@ def cmd_set_podcast(ctx, args):
             s["status"] = "ready"
         if changed:
             add_history(cfg, s, "podcast ready", url)
-        store.check_session(args.key, s)
-        store.save(doc)
-    return {"key": args.key, "changed": changed, "podcast_url": url, "status_before": before, "status": s["status"]}
+            store.check_session(args.key, s)
+            store.save(doc)
+    result = {"key": args.key, "changed": changed, "podcast_url": url, "status_before": before, "status": s["status"]}
+    if s.get("brief_sent_at") and not s.get("podcast_sent_at"):
+        # notified-partial: the brief is out; the send pass owes only the "🎧 podcast ready" message.
+        result["send"] = "podcast-link-only"
+    return result
 
 
 def cmd_set_brief(ctx, args):
@@ -914,6 +961,12 @@ def cmd_set_status(ctx, args):
         raise usage("--step must be one of %s" % ", ".join(ERROR_STEPS))
     if args.error_message and not args.error_code:
         raise usage("--error-message needs --error-code")
+    if args.reset_attempts:
+        if args.status != "pending":
+            raise usage("--reset-attempts only goes with `set-status <key> pending`")
+        if cfg.trigger_or_default() not in RESET_TRIGGERS:
+            raise usage("--reset-attempts is for Chris's reply (--trigger human) or an operator run "
+                        "(--trigger manual), not a %s run" % cfg.trigger_or_default())
     with ctx.store as store:
         doc = store.load()
         s = store.require(doc, args.key)
@@ -927,18 +980,24 @@ def cmd_set_status(ctx, args):
                 err["step"] = args.step
             s["last_error"] = err
             changed = True
-        elif args.clear_error and "last_error" in s:
+        elif (args.clear_error or args.reset_attempts) and "last_error" in s:
             del s["last_error"]
+            changed = True
+        attempts_before = s.get("attempts", 0)
+        if args.reset_attempts and attempts_before:
+            s["attempts"] = 0
             changed = True
         if changed:
             action = "status %s → %s" % (before, args.status) if before != args.status else "status %s" % args.status
             if args.error_code:
                 action += " (%s)" % s["last_error"]["code"]
+            if args.reset_attempts and attempts_before:
+                action += ", attempts reset (was %d)" % attempts_before
             add_history(cfg, s, action, args.error_message)
         store.check_session(args.key, s)
         store.save(doc)
     return {"key": args.key, "changed": changed, "status_before": before, "status": s["status"],
-            "last_error": s.get("last_error")}
+            "attempts": s.get("attempts", 0), "last_error": s.get("last_error")}
 
 
 def cmd_mark_sent(ctx, args):
@@ -961,7 +1020,10 @@ def cmd_mark_sent(ctx, args):
                 s["status"] = "done"
                 add_history(cfg, s, "brief sent with podcast link")
             else:
-                add_history(cfg, s, "brief sent", "podcast pending" if not s.get("podcast_url") else None)
+                # The brief went out without the podcast link: only "🎧 podcast ready" is owed now.
+                s["status"] = "notified-partial"
+                add_history(cfg, s, "brief sent without podcast link",
+                            "podcast pending" if not s.get("podcast_url") else "podcast link still to send")
         else:
             if not s.get("brief_sent_at"):
                 raise PrepLogError("BRIEF_NOT_SENT", "the podcast link goes out after the brief; %s has no "
@@ -995,7 +1057,7 @@ def cmd_log(ctx, args):
 
 def cmd_due(ctx, args):
     cfg = ctx.cfg
-    with ctx.store as store:
+    with ctx.store.reading() as store:
         doc = store.load()
     now = cfg.now
     today = to_eastern(now).date().isoformat()
@@ -1012,8 +1074,11 @@ def cmd_due(ctx, args):
                                "podcast_url": s.get("podcast_url"), "has_brief": s.get("brief") is not None,
                                "session": s})
         if s.get("brief_sent_at") and s.get("podcast_url") and not s.get("podcast_sent_at"):
-            links.append({"key": key, "status": status, "podcast_url": s["podcast_url"]})
-        if status == "podcast-pending":
+            links.append({"key": key, "status": status, "podcast_url": s["podcast_url"],
+                          "send": "podcast-link-only"})
+        in_flight = status == "podcast-pending" or (
+            status == "notified-partial" and s.get("notebook_id") and not s.get("podcast_url"))
+        if in_flight:
             pending.append({"key": key, "notebook_id": s.get("notebook_id"), "attempts": s.get("attempts")})
         if status == "needs-human" and s.get("class_date") == today:
             reminded = any(str(h.get("action", "")).lower().startswith("reminder") for h in s.get("history") or [])
@@ -1245,6 +1310,8 @@ def build_parser():
     s.add_argument("--error-message")
     s.add_argument("--step", choices=ERROR_STEPS)
     s.add_argument("--clear-error", action="store_true")
+    s.add_argument("--reset-attempts", action="store_true",
+                   help="with `pending`: attempts back to 0 and last_error cleared (human/manual trigger only)")
     s.set_defaults(func=cmd_set_status)
 
     s = sub.add_parser("mark-sent", help="set brief_sent_at / podcast_sent_at (refuses a second send)")

@@ -107,6 +107,9 @@ Expected: `[]`. To undo: `cp /data/openclaw.json.pre-subagent ~/.openclaw/opencl
   Expect `created_prep_log: false` when `install-workspace.sh` already seeded the file, and
   `sessions: 0`. Then ask the agent *"How do you record that a podcast was started, and what stops
   you from starting a second one?"* (expect `preplog set-notebook` and `ALREADY_HAS_NOTEBOOK`).
+- The job prompts in `triggers/*.md` now name the `preplog` commands. After pulling that change,
+  re-install the jobs so OpenClaw picks up the new text:
+  `Run: cd /data/syllabi-agent && git pull && sh scripts/install-jobs.sh --replace`.
 
 ---
 

@@ -209,7 +209,7 @@ Validation errors (raised by the main agent):
 | `READING_LIST_CONFLICT` | syllabus and Canvas disagree (ask-a-human 2) |
 | `NEEDS_OWN_ANSWER` | deliverable needs Chris's own answer (ask-a-human 4) |
 | `TOOL_BUDGET` | 25 tool calls for this session in this run |
-| `MAX_ATTEMPTS` | 3 attempts reached; session → `needs-human` (set by `preplog begin`, §8) |
+| `MAX_ATTEMPTS` | 3 attempts reached; session → `needs-human` (set by `preplog begin`, see the `preplog` section below) |
 
 ---
 
@@ -231,15 +231,15 @@ run-log file) and `--now ISO` (evals and tests only). `<key>` is `<course>@<YYYY
 | `validate` | | `sessions` (count) |
 | `get <key>` | | `session`, `plan: {steps[], recorded[]}` |
 | `list` | `--status S`*, `--course C` | `count, sessions[]` (summaries) |
-| `upsert <key>` | `--class-start`, `--canvas-course-id`, `--topic`, `--has-due-before-class`, `--notify-at`, `--from-json FILE\|-` | `created, session, plan`. `notify_at` is computed by the AGENTS.md rule when omitted |
-| `begin <key>` | | `skip, reason?, attempts, plan, notify_chris?` (stop rules; counts one attempt) |
+| `upsert <key>` | `--class-start`, `--canvas-course-id`, `--topic`, `--has-due-before-class`, `--notify-at`, `--from-json FILE\|-` | `created, changed, session, plan`. No write at all when nothing changed. `--notify-at` (from the syllabi skill) wins; without it `notify_at` is computed by the AGENTS.md rule for a new record and recomputed when `class_start` / `has_due_before_class` change. `class_start` must fall on the key's ET date. `--from-json` may not set `history, attempts, notebook_id, status, *_sent_at, podcast_url, brief, last_error` |
+| `begin <key>` | | `skip, reason?, attempts, plan, notify_chris?` (stop rules: skips `podcast-pending, ready, notified-partial, done, needs-human`; counts one attempt) |
 | `add-reading <key>` | `--title --source canvas_file\|external --id-or-url` `[--local-path --drive-path --requires-login --truncated-for-brief]` | `created, reading, readings, plan` (idempotent on source + id_or_url) |
 | `add-drive-path <key> <path>` | | `added, drive_paths` |
 | `set-notebook <key> <id>` | | `changed, status_before, status` (→ `podcast-pending`) |
-| `set-podcast <key> --url` | | `changed, status_before, status` (`podcast-pending` → `ready`) |
+| `set-podcast <key> --url` | | `changed, status_before, status, send?` (`podcast-pending` → `ready`; `notified-partial` stays, `send: "podcast-link-only"`) |
 | `set-brief <key> --from FILE\|-` | brief JSON | `replaced, questions, plan` |
-| `set-status <key> <status>` | `--error-code --error-message --step`, `--clear-error` | `changed, status_before, status, last_error` |
-| `mark-sent <key> brief\|podcast` | `--podcast-included` | `status, brief_sent_at, podcast_sent_at` |
+| `set-status <key> <status>` | `--error-code --error-message --step`, `--clear-error`, `--reset-attempts` (with `pending`, `--trigger human\|manual` only) | `changed, status_before, status, attempts, last_error` |
+| `mark-sent <key> brief\|podcast` | `--podcast-included` | `status, brief_sent_at, podcast_sent_at` (`brief` alone → `notified-partial`; with the link, or `podcast` → `done`) |
 | `log <key> --action A` | `--detail D` | `entry, history` (length) |
 | `due` | | `briefs[], podcast_links[], podcast_pending[], needs_human_today[], nothing_to_do` |
 | `runlog` | `--sessions --tools --decisions --outcome --line`* (needs `--trigger`) | `path, date, lines` |
@@ -248,7 +248,9 @@ run-log file) and `--now ISO` (evals and tests only). `<key>` is `<course>@<YYYY
 `plan.steps` ⊆ `find_readings, download, drive, podcast, brief`: only the work the record does not
 already show (hard rule 4). `due` is the send pass: `briefs` = `notify_at ≤ now` and no
 `brief_sent_at` (a `needs-human` record with no brief and no Drive links is left out);
-`podcast_links` = brief sent, `podcast_url` set, `podcast_sent_at` unset.
+`podcast_links` = brief sent, `podcast_url` set, `podcast_sent_at` unset (`send: "podcast-link-only"`);
+`podcast_pending` = `podcast-pending`, plus `notified-partial` records with a `notebook_id` and no
+`podcast_url` (their audio is still in flight).
 
 | code | when | retryable | agent action |
 | --- | --- | --- | --- |
@@ -256,7 +258,7 @@ already show (hard rule 4). `due` is the send pass: `briefs` = `notify_at ≤ no
 | `ALREADY_HAS_NOTEBOOK` | a different `notebook_id` is already recorded | no | do not call `nlm-prep`; `nlm-status` the existing notebook |
 | `ALREADY_SENT` | that `*_sent_at` guard is already set | no | do not send |
 | `BRIEF_NOT_SENT` | podcast link before the brief | no | send the brief first |
-| `BRIEF_SCHEMA_INVALID` | the brief fails `brief.schema.json` (`detail.errors`); nothing stored | no | re-prompt once with the errors, then `set-status partial` (§6) |
+| `BRIEF_SCHEMA_INVALID` | the brief fails `brief.schema.json` (`detail.errors`); nothing stored | no | re-prompt once with the errors, then `set-status partial` (see `brief-writer` above) |
 | `PREPLOG_INVALID` | the write would break the schema (`detail.errors`); nothing written | no | fix the field; for `--from-json`, drop unknown keys |
 | `PREPLOG_CORRUPT` | the file is not valid JSON / not version 1; never overwritten | no | say so in the run log; Chris repairs it |
 | `SCHEMA_MISSING` | `memory-templates/` not reachable from the skill | no | run `scripts/install-workspace.sh` |
@@ -264,4 +266,6 @@ already show (hard rule 4). `due` is the send pass: `briefs` = `notify_at ≤ no
 
 Guards this tool enforces, so the model does not have to: one `notebook_id` per session, one
 brief send and one podcast-link send per session, `attempts` capped at 3 (`needs-human`,
-`MAX_ATTEMPTS`, `notify_chris` once), and a `plan` that never lists a recorded step.
+`MAX_ATTEMPTS`, `notify_chris` once; only a `human`/`manual` `set-status pending --reset-attempts`
+starts over), a `plan` that never lists a recorded step, and an `upsert` that writes nothing when
+nothing changed. It does **not** count tool calls: the 25-per-session budget is the agent's rule.

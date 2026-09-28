@@ -9,7 +9,7 @@ were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritim
 
 > **Status: V0 scaffold.** The instructions, schemas, trigger prompts and tool contracts are in
 > place. The skill scripts (`canvas`, `nlm`, `drive`) are stubs, to be filled in by V2–V4.
-> The `preplog` memory skill (SYL-102) is implemented and tested: the prep-log state machine with
+> The `preplog` memory skill (SYL-100, memory half) is implemented and tested: the prep-log state machine with
 > its never-redo guards, the run log and course-notes edits.
 
 ---
@@ -35,7 +35,7 @@ were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritim
 │   │   ├── canvas/SKILL.md       ← Canvas LMS reads (stub)
 │   │   ├── nlm/SKILL.md          ← nlm-prep / nlm-status for NotebookLM (stub)
 │   │   ├── drive/SKILL.md        ← drive-put via rclone (stub)
-│   │   └── preplog/              ← memory tool: prep-log state machine, run log, course notes (SYL-102)
+│   │   └── preplog/              ← memory tool: prep-log state machine, run log, course notes (SYL-100, memory half)
 │   │       ├── SKILL.md
 │   │       └── scripts/preplog.py  (+ `preplog` symlink)
 │   └── memory-templates/
