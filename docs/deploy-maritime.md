@@ -98,7 +98,12 @@ Expected: `[]`. To undo: `cp /data/openclaw.json.pre-subagent ~/.openclaw/opencl
 ## 7. Still to do
 
 - Check the V2–V4 tooling: `python3`, `pip`, `notebooklm-py`, `rclone`, and whether installs
-  survive a restart.
+  survive a restart. The canvas skill (SYL-93) needs only `python3` (standard library). Check it
+  with, in the agent chat:
+  ```
+  Run: python3 /data/syllabi-agent/workspace/skills/canvas/scripts/canvas.py whoami
+  Run: python3 /data/syllabi-agent/workspace/skills/canvas/scripts/canvas.py modules 40577
+  ```
 - Upload secrets to `/data/secrets/` and `/data/rclone/`, and set the environment variables with
   `maritime env set` (see `.env.example`).
 - Smoke-test the memory tool (agent chat):

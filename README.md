@@ -32,7 +32,9 @@ were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritim
 │   ├── agents/
 │   │   └── brief-writer.md       ← subagent definition: role, bounded context, output contract
 │   ├── skills/
-│   │   ├── canvas/SKILL.md       ← Canvas LMS reads (stub)
+│   │   ├── canvas/
+│   │   │   ├── SKILL.md          ← Canvas LMS reads: commands, errors, reading discovery rule
+│   │   │   └── scripts/canvas.py ← the CLI (stdlib Python, GET only); scripts/canvas is a symlink to it
 │   │   ├── nlm/SKILL.md          ← nlm-prep / nlm-status for NotebookLM (stub)
 │   │   ├── drive/SKILL.md        ← drive-put via rclone (stub)
 │   │   └── preplog/              ← memory tool: prep-log state machine, run log, course notes (SYL-100, memory half)
@@ -53,6 +55,7 @@ were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritim
 │   └── hw2-writeup.md            ← HW2 writeup skeleton (one heading per rubric item)
 ├── tests/
 │   └── test_preplog.py           ← unit tests for the preplog skill (no network): python3 -m unittest discover -s tests
+│   └── test_canvas.py            ← canvas skill tests, no network: python3 -m unittest discover -s tests
 └── evidence/
     ├── eval/cases.md             ← the 5 eval cases, baseline vs improved (results blank)
     └── failures/                 ← screenshots/logs of failures and recoveries
@@ -118,9 +121,10 @@ Timing: **24 hours before class** if something is due beforehand, **morning-of**
 
 Full contracts in [`docs/tool-contract.md`](docs/tool-contract.md).
 
-- **`canvas` skill** (or `vishalsachdev/canvas-mcp` as an MCP server if the template supports it):
-  `list_modules`, `list_files`, `download_file` → `/data/readings/`, `upcoming_assignments`,
-  `get_page`. Reports 401 and 403 as separate errors.
+- **`canvas` skill** (`workspace/skills/canvas/scripts/canvas.py`, plain REST, GET only):
+  `modules`, `files`, `download` → `/data/readings/`, `assignments`, `page`, `whoami`.
+  Reports 401 and 403 as separate errors. Sanitizes file names, never forwards the token across
+  the pre-signed download redirect, refuses redirects to non-https or private addresses.
 - **syllabi endpoint:** `GET /agent/upcoming?days=3` (sessions, topics, reading links, anything
   due, `canvas_course_id`), `GET /agent/course/:id`. Bearer agent token.
 - **`nlm-prep <course> <date> <pdf...>`** creates a notebook, adds sources, *starts* the audio
@@ -229,5 +233,5 @@ deploy. The full runbook is in [`docs/deploy-maritime.md`](docs/deploy-maritime.
 | new | Config persistence | `openclaw config patch` changes survive `maritime restart`; Maritime does not regenerate `openclaw.json`. |
 | new | Filesystem persistence | On restart Maritime logs "Captured derived image … Edits will survive restart", so installs outside `/data` should persist too. Confirm with the first V2 install. |
 
-Still to check before V2: whether `python3`, `pip`, `notebooklm-py` and `rclone` are available, and
-that an install survives a restart.
+Still to check: whether `python3` (all the canvas skill needs), `pip`, `notebooklm-py` and `rclone`
+are available, and that an install survives a restart.
