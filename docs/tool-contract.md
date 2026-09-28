@@ -135,23 +135,48 @@ Cookies: `$NLM_COOKIES_PATH` = `/data/secrets/notebooklm-cookies.json`.
 
 ## 4. `drive` skill (rclone)
 
-Config: `$RCLONE_CONFIG` = `/data/rclone/rclone.conf`. Root: `$DRIVE_READINGS_ROOT`.
+Implemented as `workspace/skills/drive/scripts/drive.py` (SYL-95; `scripts/drive-put` is a
+symlink to it that implies the subcommand), a standard-library Python wrapper over the `rclone`
+binary. Config: `$RCLONE_CONFIG` = `/data/rclone/rclone.conf`. Root: `$DRIVE_READINGS_ROOT`
+(`gdrive:Readings`); podcasts go in the same tree (`nlm-status` passes `<course>/<date>`). Every
+command finishes within `$DRIVE_TIMEOUT` (default 35 s) or returns `DRIVE_UNAVAILABLE`
+(`retryable: true`).
 
-### `drive-put <local_path> <remote_dir>`
+### `drive-put <local_path> <remote_dir>` (= `drive.py put`)
 
 | | |
 | --- | --- |
-| Inputs | `local_path` under `/data/`; `remote_dir` relative to the root, e.g. `MAS.665/2026-09-29` |
-| Output | `{ok: true, remote_path, share_link, uploaded}`, where `uploaded: false` means it was already there |
-| Idempotency | same name and same size/hash in `remote_dir`: no upload, same link returned |
+| Inputs | `local_path` under `/data/` with a safe name (`[A-Za-z0-9._ -]`, no leading dot); `remote_dir` relative to the root, e.g. `MAS.665/2026-09-29` (`Readings/MAS.665/2026-09-29` is accepted and means the same folder) |
+| Behavior | `rclone lsjson --hash` the folder; if a file with the same name, size and MD5 is there, transfer nothing; else `rclone copyto --ignore-times` (a same-name file with other content is replaced in place), list again and verify size and MD5. Then build the link |
+| Output | `{ok: true, remote_path, share_link, uploaded, bytes, md5, file_id, share: "private" \| "anyone", local_path}`, where `uploaded: false` means it was already there |
+| Link | `DRIVE_SHARE=private` (default): `https://drive.google.com/file/d/<id>/view`, opens for Chris's account, no permission changed. `DRIVE_SHARE=anyone`: `rclone link` ("anyone with the link") |
+| Idempotency | same name and same size/MD5 in `remote_dir`: no upload, same link returned. Never deletes, moves or renames; never `rclone sync` |
+| Limits | > 100 MB refused before any transfer (`FILE_TOO_LARGE`); for a big file run it in the background with `DRIVE_TIMEOUT=300` |
+
+### `drive.py check`
+
+`{ok: true, root, root_exists, entries, used_bytes?, free_bytes?, total_bytes?, config_path, share}`:
+config smoke test (lists the root, reads the quota).
+
+Security rules the implementation enforces (SYL-95): `local_path` must resolve under `$DATA_DIR`
+(realpath, so symlinks can't escape) and carry a safe name; `remote_dir` is checked segment by
+segment (no `..`, leading dot or dash, `:` or `\`); every value in `rclone.conf` is redacted from
+stdout and stderr (including crash output and rclone's messages); only `lsjson`, `copyto`, `link`
+and `about` are ever run; nothing is made public unless `DRIVE_SHARE=anyone`; ids from Drive are
+validated before they go into a URL; `-v` logs `<op> <path>` only.
 
 | code | when | retryable | agent action |
 | --- | --- | --- | --- |
-| `DRIVE_AUTH` | rclone token invalid | no | ask Chris to reconnect the rclone remote |
-| `DRIVE_QUOTA` | quota exceeded | yes (next run) | |
+| `DRIVE_AUTH` | `rclone.conf` missing, token expired/revoked, remote not in the config | no | keep the local files, set `partial` for the Drive step, carry on, ask Chris once to reconnect the rclone remote and upload the new conf |
+| `DRIVE_QUOTA` | storage quota or API rate limit | yes (next run) | |
 | `FILE_TOO_LARGE` | > 100 MB | no | skip it, tell Chris |
 | `LOCAL_NOT_FOUND` | missing local file | no | a bug: log it |
-| `DRIVE_UNAVAILABLE` | network / 5xx | yes (once) | |
+| `BAD_FILENAME` | unsafe local file name | no | rename it first |
+| `DRIVE_UNAVAILABLE` | network / 5xx / timeout (`retryable: true`); rclone usage or fatal exit (`retryable: false`) | see `retryable` | retry once if retryable, then `partial` |
+| `DRIVE_NOT_INSTALLED` | no `rclone` binary | no | tell Chris |
+| `USAGE` | bad arguments or `DRIVE_*` environment | no | a bug in the call |
+
+Tests (no network, fake rclone): `python3 -m unittest discover -s tests`.
 
 ---
 

@@ -98,9 +98,30 @@ Expected: `[]`. To undo: `cp /data/openclaw.json.pre-subagent ~/.openclaw/opencl
 ## 7. Still to do
 
 - Check the V2–V4 tooling: `python3`, `pip`, `notebooklm-py`, `rclone`, and whether installs
-  survive a restart.
+  survive a restart. The drive skill (SYL-95) needs the `rclone` binary. In the agent chat:
+  ```
+  Run: rclone version
+  ```
+  If it is missing, put a static build on the volume (pick `arm64` if `uname -m` says `aarch64`):
+  ```
+  Run: mkdir -p /data/bin && curl -fsSL https://downloads.rclone.org/rclone-current-linux-amd64.zip -o /tmp/rclone.zip && python3 -c "import zipfile; zipfile.ZipFile('/tmp/rclone.zip').extractall('/tmp/rclone')" && cp /tmp/rclone/rclone-*/rclone /data/bin/rclone && chmod +x /data/bin/rclone && /data/bin/rclone version
+  ```
+  and set `DRIVE_RCLONE_BIN=/data/bin/rclone` with `maritime env set`. Then, with
+  `/data/rclone/rclone.conf` uploaded (next bullet):
+  ```
+  Run: python3 /data/syllabi-agent/workspace/skills/drive/scripts/drive.py check
+  ```
+  `check` must print `{"ok": true, "root": "gdrive:Readings", ...}`. `DRIVE_AUTH` means the
+  config file is missing or its token is stale; `DRIVE_NOT_INSTALLED` means rclone was not found.
+  Then one real upload, twice:
+  `Run: /data/syllabi-agent/workspace/skills/drive/scripts/drive-put /data/readings/MAS.665/<date>/<file>.pdf MAS.665/<date>`.
+  The first run says `uploaded: true`; open its `share_link` on the iPad (signed in to Google);
+  the second run must say `uploaded: false` with the same link and transfer nothing. Restart the
+  agent and re-run `check` to confirm the install survived.
 - Upload secrets to `/data/secrets/` and `/data/rclone/`, and set the environment variables with
-  `maritime env set` (see `.env.example`).
+  `maritime env set` (see `.env.example`). The rclone config is made on the laptop:
+  `rclone config` → new remote `gdrive`, storage `drive`, scope `drive`, default client id, OAuth
+  in the browser; then upload `~/.config/rclone/rclone.conf` to `/data/rclone/rclone.conf`.
 
 ---
 

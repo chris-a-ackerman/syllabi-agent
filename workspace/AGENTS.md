@@ -75,7 +75,12 @@ Each skill's `SKILL.md` lists its commands and error codes (the full contract is
   `list_files`, `download_file`, `upcoming_assignments`, `get_page`. Read-only.
 - **nlm** skill: `nlm-prep` (start a notebook and audio, returns at once), `nlm-status`
   (check or download audio).
-- **drive** skill: `drive-put` (idempotent upload, returns a share link).
+- **drive** skill (Google Drive via rclone): `skills/drive/scripts/drive-put <local_path> <course>/<date>`
+  copies one file under `/data/` to `Readings/<course>/<date>/` and returns
+  `{remote_path, share_link, uploaded}`. Idempotent: a file already there with the same size and
+  MD5 is not sent again and gets the same link, so calling it twice is safe. It never deletes
+  anything. `DRIVE_AUTH` means rclone needs reconnecting (tell Chris once, keep the local files,
+  carry on). `python3 skills/drive/scripts/drive.py check` is the config smoke test.
 - **Telegram**: when a cron job is running, nobody messaged you, so a normal reply goes nowhere.
   Send with `maritime-telegram-send "text"` (or `printf '%s' "$msg" | maritime-telegram-send -`
   for multi-line text). It works only when `MARITIME_TELEGRAM_CONNECTED=1`. When Chris messages
@@ -121,8 +126,11 @@ For each session from `GET /agent/upcoming?days=3` whose class starts in the **n
    external links: download them if they are public. If one is behind a login or returns 403,
    ask a human (condition 1). On `CANVAS_403`, fall back to the syllabus link if there is one.
    Otherwise treat it as condition 1.
-5. **Drive.** Run `drive-put` for each local file to `Readings/<course>/<date>/`. Record the
-   `drive_paths[]`.
+5. **Drive.** Run `drive-put <file> <course>/<date>` for each local file (it lands in
+   `Readings/<course>/<date>/`). Record each `remote_path` in `drive_paths[]` and keep the
+   `share_link` for the brief. `uploaded: false` means it was already there: fine. On
+   `DRIVE_AUTH`, keep the local files, set `partial` with `last_error` (step `drive`), tell
+   Chris once that rclone needs reconnecting, and keep going with the other steps.
 6. **Podcast.** If there is no `notebook_id`, run `nlm-prep` with the PDFs. Record `notebook_id`
    and set status `podcast-pending`. On `NLM_AUTH`, retry once. If it fails again, set
    `partial`, record `last_error`, and ask a human (condition 3). Keep going with the other steps.

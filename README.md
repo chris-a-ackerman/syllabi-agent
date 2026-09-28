@@ -7,8 +7,10 @@ Deploying means creating an agent from Maritime's OpenClaw template, cloning thi
 persistent volume, running two install scripts, and adding one Maritime wake trigger. The steps
 were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritime.md).
 
-> **Status: V0 scaffold.** The instructions, schemas, trigger prompts and tool contracts are in
-> place. The skill scripts (`canvas`, `nlm`, `drive`) are stubs, to be filled in by V2–V4.
+> **Status: V0 scaffold + V4 drive skill.** The instructions, schemas, trigger prompts and tool
+> contracts are in place. The `drive` skill is implemented (SYL-95, tested against a fake rclone,
+> not yet run against Google Drive). `canvas` (SYL-93, PR #2) and `nlm` (SYL-94, PR #3) are on
+> their own branches.
 
 ---
 
@@ -32,7 +34,9 @@ were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritim
 │   ├── skills/
 │   │   ├── canvas/SKILL.md       ← Canvas LMS reads (stub)
 │   │   ├── nlm/SKILL.md          ← nlm-prep / nlm-status for NotebookLM (stub)
-│   │   └── drive/SKILL.md        ← drive-put via rclone (stub)
+│   │   └── drive/
+│   │       ├── SKILL.md          ← Google Drive uploads: put / check, errors, agent rules
+│   │       └── scripts/drive.py  ← the CLI over rclone; drive-put is a symlink to it
 │   └── memory-templates/
 │       ├── prep-log.schema.json  ← JSON Schema for /data/memory/prep-log.json
 │       ├── brief.schema.json     ← JSON Schema for brief-writer output
@@ -46,6 +50,8 @@ were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritim
 │   ├── deploy-maritime.md        ← verified deploy runbook + what we learned about Maritime
 │   ├── tool-contract.md          ← every tool: name, inputs, outputs, error shape
 │   └── hw2-writeup.md            ← HW2 writeup skeleton (one heading per rubric item)
+├── tests/
+│   └── test_drive.py             ← drive skill tests, no network: python3 -m unittest discover -s tests
 └── evidence/
     ├── eval/cases.md             ← the 5 eval cases, baseline vs improved (results blank)
     └── failures/                 ← screenshots/logs of failures and recoveries
@@ -121,8 +127,13 @@ Full contracts in [`docs/tool-contract.md`](docs/tool-contract.md).
   **`nlm-status <notebook_id>`** returns `{status: pending|ready|failed, audio_url?}`. When the
   audio is ready, it downloads the mp3 to `/data/podcasts/` and pushes it to Drive.
   Cookies are at `/data/secrets/notebooklm-cookies.json`. Auth failure returns error code `NLM_AUTH`.
-- **`drive-put <local_path> <remote_dir>`** returns a share link, via rclone. Config is at
-  `/data/rclone/rclone.conf`. Idempotent.
+- **`drive-put <local_path> <remote_dir>`** (`workspace/skills/drive/scripts/drive.py put`) copies
+  one file under `/data/` to `Readings/<course>/<date>/` with rclone and returns
+  `{remote_path, share_link, uploaded}`. Idempotent: a file already there with the same size and
+  MD5 is not sent again and gets the same link. The link is private by default
+  (`DRIVE_SHARE=anyone` makes it "anyone with the link"). Config is at `/data/rclone/rclone.conf`;
+  its values are scrubbed from every output line. Auth failure returns error code `DRIVE_AUTH`.
+  `drive.py check` is the config smoke test.
 - **Telegram** (Maritime channel) for briefs and questions, sent with `maritime-telegram-send`.
 
 ### Memory (rubric 2): read at the start of every run, written at the end
@@ -215,5 +226,6 @@ deploy. The full runbook is in [`docs/deploy-maritime.md`](docs/deploy-maritime.
 | new | Config persistence | `openclaw config patch` changes survive `maritime restart`; Maritime does not regenerate `openclaw.json`. |
 | new | Filesystem persistence | On restart Maritime logs "Captured derived image … Edits will survive restart", so installs outside `/data` should persist too. Confirm with the first V2 install. |
 
-Still to check before V2: whether `python3`, `pip`, `notebooklm-py` and `rclone` are available, and
-that an install survives a restart.
+Still to check: whether `python3`, `pip` and `notebooklm-py` are available, whether `rclone` is
+installed (the drive skill needs it on PATH; `drive.py check` tells you), and that an install
+survives a restart.
