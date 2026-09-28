@@ -35,9 +35,10 @@ were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritim
 │   ├── agents/
 │   │   └── brief-writer.md       ← subagent definition: role, bounded context, output contract
 │   ├── skills/
-│   │   ├── canvas/
-│   │   │   ├── SKILL.md          ← Canvas LMS reads: commands, errors, reading discovery rule
-│   │   │   └── scripts/canvas.py ← the CLI (stdlib Python, GET only); scripts/canvas is a symlink to it
+│   │   ├── syllabi/
+│   │   │   ├── SKILL.md          ← the schedule of record: upcoming / course / check, errors, agent rules
+│   │   │   └── scripts/syllabi.py← the CLI over the app's agent-upcoming endpoint; `syllabi` is a symlink
+│   │   ├── canvas/SKILL.md       ← Canvas LMS reads (stub)
 │   │   ├── nlm/SKILL.md          ← nlm-prep / nlm-status for NotebookLM (stub)
 │   │   ├── drive/SKILL.md        ← drive-put via rclone (stub)
 │   │   ├── brief/                ← brief-writer pipeline: bundle, validate, format (SYL-96)
@@ -63,6 +64,7 @@ were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritim
 │   ├── tool-contract.md          ← every tool: name, inputs, outputs, error shape
 │   └── hw2-writeup.md            ← HW2 writeup skeleton (one heading per rubric item)
 ├── tests/
+│   └── test_syllabi.py           ← syllabi skill tests, no network: python3 -m unittest discover -s tests
 │   ├── test_brief.py             ← unit tests for the brief skill (no network): python3 -m unittest discover -s tests
 │   └── test_pdf_text.py          ← unit tests for the pdf-text helper
 │   └── test_preplog.py           ← unit tests for the preplog skill (no network): python3 -m unittest discover -s tests
@@ -132,6 +134,13 @@ Timing: **24 hours before class** if something is due beforehand, **morning-of**
 
 Full contracts in [`docs/tool-contract.md`](docs/tool-contract.md).
 
+- **`syllabi` skill** (`workspace/skills/syllabi/scripts/syllabi.py`): `upcoming --days 3
+  --within-hours 48` calls the syllabi app's `agent-upcoming` edge function with a scoped,
+  revocable agent token (minted in the app's Settings → Agent access) and returns one record per
+  upcoming class meeting: the prep-log `key`, `class_start`, `canvas_course_id`, what is
+  `due_before_class`, and the `notify_at` the agent must store, all in ET. `course <code>` gives
+  one course's schedule and policies; `check` is the auth smoke test. Auth failure is
+  `SYLLABI_401`. The app does not send reading links yet, so readings come from Canvas.
 - **`canvas` skill** (`workspace/skills/canvas/scripts/canvas.py`, plain REST, GET only):
   `modules`, `files`, `download` → `/data/readings/`, `assignments`, `page`, `whoami`.
   Reports 401 and 403 as separate errors. Sanitizes file names, never forwards the token across
