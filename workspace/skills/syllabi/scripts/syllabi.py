@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""syllabi: read-only client for the syllabi app's agent endpoint (SYL-96, V5).
+"""syllabi: read-only client for the syllabi app's agent endpoint (SYL-105).
 
     syllabi.py upcoming [--days N] [--within-hours H] [--now ISO]
     syllabi.py course   <course_id_or_code>
@@ -70,7 +70,10 @@ DUE_LEAD = dt.timedelta(hours=24)
 DUE_TYPES = ("deadline", "exam", "quiz", "presentation", "project_due", "other")
 
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-_HH_MM = re.compile(r"^([01]?\d|2[0-3]):[0-5]\d$")
+# Postgres TIME columns serialize as HH:MM:SS (optionally with fractional seconds); the session
+# expander sends HH:MM. Both are accepted and normalized to HH:MM.
+_HH_MM = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)(?::[0-5]\d(?:\.\d+)?)?$")
+_KEY_UNSAFE = re.compile(r"[\s@]+")
 _TOKEN_RE = re.compile(r"^syl_agent_[A-Za-z0-9_-]{43}$")
 
 Response = namedtuple("Response", "status headers body")
@@ -318,9 +321,9 @@ def _text(value, limit=MAX_TEXT):
 def _time(value):
     if value is None:
         return None
-    if isinstance(value, str) and _HH_MM.match(value.strip()):
-        h, m = value.strip().split(":")
-        return "%02d:%s" % (int(h), m)
+    match = _HH_MM.match(value.strip()) if isinstance(value, str) else None
+    if match:
+        return "%02d:%s" % (int(match.group(1)), match.group(2))
     return None
 
 
@@ -537,8 +540,22 @@ def _iso(value):
     return value.isoformat(timespec="seconds") if value is not None else None
 
 
+def _utc(value):
+    return value.astimezone(dt.timezone.utc)
+
+
+# Arithmetic and comparisons between datetimes that share a tzinfo object are done on the wall
+# clock, so across a DST change "start - 24h" or "start - now" is off by an hour. Everything below
+# goes through UTC instead.
+
+
+def _before(value, delta, tz):
+    """`value - delta` in elapsed time, returned in `tz`."""
+    return (_utc(value) - delta).astimezone(tz)
+
+
 def _hours_between(later, earlier):
-    return round((later - earlier).total_seconds() / 3600.0, 2)
+    return round((_utc(later) - _utc(earlier)).total_seconds() / 3600.0, 2)
 
 
 def _due_at(event, tz, class_start=None):
@@ -564,30 +581,52 @@ def _bounded(value, limit=20000):
 # --------------------------------------------------------------------------- planning view
 
 
+def course_slug(code):
+    """The course half of a prep-log key: no whitespace or '@' (prep-log.schema.json requires
+    `^[^@\\s]+@\\d{4}-\\d{2}-\\d{2}$`), so "CS 101" becomes "CS-101"."""
+    return _KEY_UNSAFE.sub("-", code.strip()).strip("-") or "course"
+
+
 def build_sessions(payload, now, tz, within_hours=None):
     """Turn the validated payload into planning records, one per class meeting.
-    `now` is timezone-aware. Sessions that already started are dropped."""
+    `now` is timezone-aware. Sessions that already started are dropped; a session with no start
+    time is "sometime that day" and is kept until the day is over."""
     courses = {c["id"]: c for c in payload["courses"]}
     events = payload["events"]
     out = []
     for s in payload["sessions"]:
         course = courses.get(s["course_id"], {})
         code = s["code"] or course.get("code") or s["course_id"]
-        start = _local(s["date"], s["start"], tz)
-        end = _local(s["date"], s["end"], tz) if s["end"] else None
-        if end is not None and end < start:
-            end = end + dt.timedelta(days=1)
-        if start < now:
-            continue
-        hours_until = _hours_between(start, now)
-        if within_hours is not None and hours_until > within_hours:
-            continue
+        slug = course_slug(code)
+        day = dt.date.fromisoformat(s["date"])
+        day_start = _local(s["date"], None, tz)
+        day_end = dt.datetime.combine(day + dt.timedelta(days=1), dt.time(0, 0)).replace(tzinfo=tz)
+        morning = dt.datetime.combine(day, dt.time(*MORNING_NOTIFY)).replace(tzinfo=tz)
+        if s["start"] is not None:
+            start = _local(s["date"], s["start"], tz)
+            end = _local(s["date"], s["end"], tz) if s["end"] else None
+            if end is not None and _utc(end) < _utc(start):
+                end = end + dt.timedelta(days=1)
+            if _utc(start) < _utc(now):
+                continue
+            hours_until = _hours_between(start, now)
+            window_end = start                      # things due no later than class start
+        else:
+            start = end = None
+            if _utc(now) >= _utc(day_end):
+                continue
+            hours_until = None
+            window_end = _local(s["date"], "23:59", tz)   # unknown start: the whole class day counts
+        if within_hours is not None:
+            lead = hours_until if hours_until is not None else max(0.0, _hours_between(day_start, now))
+            if lead > within_hours:
+                continue
         due = []
         for e in events:
             if e["course_id"] != s["course_id"] or e["type"] == "no_class":
                 continue
             when = _due_at(e, tz, class_start=start)
-            if not (now <= when <= start):        # still ahead of us, and no later than class
+            if not (_utc(now) <= _utc(when) <= _utc(window_end)):   # still ahead of us, no later than class
                 continue
             due.append({
                 "title": e["title"],
@@ -600,15 +639,16 @@ def build_sessions(payload, now, tz, within_hours=None):
                 "source": e["source"],
             })
         has_due = bool(due)
-        if has_due:
-            notify_at = start - DUE_LEAD
+        if has_due and start is not None:
+            notify_at = _before(start, DUE_LEAD, tz)
         else:
-            notify_at = dt.datetime.combine(start.date(), dt.time(*MORNING_NOTIFY)).replace(tzinfo=tz)
-        if notify_at < now:
+            notify_at = morning                     # nothing due, or no start time to count back from
+        if _utc(notify_at) < _utc(now):
             notify_at = now
         out.append({
-            "key": "%s@%s" % (code, s["date"]),
-            "course": code,
+            "key": "%s@%s" % (slug, s["date"]),
+            "course": slug,
+            "course_code": code,
             "course_id": s["course_id"],
             "course_name": course.get("name"),
             "canvas_course_id": course.get("canvas_course_id"),

@@ -1,4 +1,4 @@
-"""Tests for workspace/skills/syllabi/scripts/syllabi.py (SYL-96).
+"""Tests for workspace/skills/syllabi/scripts/syllabi.py (SYL-105).
 
 No network: the module's `transport`, `sleep` and `now_utc` hooks are replaced with fakes, and the
 urllib layer is exercised against a fake opener.
@@ -93,7 +93,7 @@ def payload(**overrides):
             {"course_id": "c-pwd", "code": "15.286", "date": "2026-09-30", "start": "10:00", "end": "11:30"},
         ],
         "events": [
-            {"course_id": "c-mas", "code": "MAS.665", "date": "2026-09-28", "time": "23:59",
+            {"course_id": "c-mas", "code": "MAS.665", "date": "2026-09-28", "time": "23:59:00",
              "title": "Pre-class questions 4", "type": "deadline", "category": "HW", "confidence": "high",
              "source": "canvas_matched", "canvas_url": "https://canvas.mit.edu/courses/40577/assignments/9"},
             {"course_id": "c-pwd", "code": "15.286", "date": "2026-09-30", "time": None,
@@ -102,7 +102,7 @@ def payload(**overrides):
             {"course_id": "c-pwd", "code": "15.286", "date": "2026-09-29", "time": None,
              "title": "No class (holiday make-up)", "type": "no_class", "category": None, "confidence": None,
              "source": "syllabus", "canvas_url": None},
-            {"course_id": "c-mas", "code": "MAS.665", "date": "2026-09-27", "time": "12:00",
+            {"course_id": "c-mas", "code": "MAS.665", "date": "2026-09-27", "time": "12:00:00",
              "title": "Already past", "type": "deadline", "category": None, "confidence": None,
              "source": "syllabus", "canvas_url": None},
         ],
@@ -545,13 +545,36 @@ class NormalisationTests(SyllabiTestCase):
         self.assertIn("MAS.665@2026-09-29", keys)
         self.assertIn("c-unknown@2026-09-29", keys)
 
-    def test_untimed_session_is_midnight_and_flagged(self):
+    def test_untimed_session_is_sometime_that_day(self):
         data = payload(sessions=[{"course_id": "c-mas", "code": "MAS.665", "date": "2026-09-29", "start": None, "end": None}])
+        data["events"].append({"course_id": "c-mas", "code": "MAS.665", "date": "2026-09-29", "time": "20:00:00",
+                               "title": "Evening memo", "type": "deadline", "source": "syllabus"})
         self.fake.add(upcoming_url(3), json_body=data)
         s = self.ok("upcoming")["sessions"][0]
-        self.assertEqual(s["class_start"], "2026-09-29T00:00:00-04:00")
+        self.assertIsNone(s["class_start"])                 # not midnight
         self.assertIsNone(s["class_end"])
+        self.assertIsNone(s["hours_until_class"])
         self.assertFalse(s["start_time_known"])
+        # The due window runs to the end of the class day, and the 06:30 notification stays.
+        self.assertEqual([d["title"] for d in s["due_before_class"]], ["Pre-class questions 4", "Evening memo"])
+        self.assertTrue(s["has_due_before_class"])
+        self.assertEqual(s["notify_at"], "2026-09-29T06:30:00-04:00")
+
+    def test_untimed_session_is_kept_until_the_day_is_over(self):
+        data = payload(sessions=[{"course_id": "c-mas", "code": "MAS.665", "date": "2026-09-29", "start": None, "end": None}])
+        self.fake.add(upcoming_url(3), json_body=data, repeat=True)
+        s = self.ok("upcoming", "--now", "2026-09-29T15:00:00-04:00")["sessions"]
+        self.assertEqual([x["key"] for x in s], ["MAS.665@2026-09-29"])
+        self.assertEqual(s[0]["notify_at"], "2026-09-29T15:00:00-04:00")   # 06:30 has passed: now
+        self.assertEqual(self.ok("upcoming", "--now", "2026-09-29T23:59:00-04:00")["sessions"][0]["key"],
+                         "MAS.665@2026-09-29")
+        self.assertEqual(self.ok("upcoming", "--now", "2026-09-30T00:00:00-04:00")["sessions"], [])
+
+    def test_untimed_session_within_hours_counts_from_the_start_of_the_day(self):
+        data = payload(sessions=[{"course_id": "c-mas", "code": "MAS.665", "date": "2026-09-29", "start": None, "end": None}])
+        self.fake.add(upcoming_url(3), json_body=data, repeat=True)
+        self.assertEqual(len(self.ok("upcoming", "--within-hours", "29")["sessions"]), 1)    # 00:00 is 29 h away
+        self.assertEqual(self.ok("upcoming", "--within-hours", "28")["sessions"], [])
 
     def test_end_before_start_rolls_to_next_day(self):
         data = payload(sessions=[{"course_id": "c-mas", "code": "MAS.665", "date": "2026-09-29", "start": "23:00", "end": "00:30"}])
@@ -615,6 +638,115 @@ class NormalisationTests(SyllabiTestCase):
         self.fake.add(upcoming_url(3), json_body=data)
         mas = self.sessions_by_key(self.ok("upcoming"))["MAS.665@2026-09-29"]
         self.assertEqual(mas["due_before_class"][0]["type"], "other")
+
+
+class PostgresTimeTests(SyllabiTestCase):
+    def test_time_accepts_seconds_and_normalizes_to_hh_mm(self):
+        self.assertEqual(syllabi._time("23:59:00"), "23:59")
+        self.assertEqual(syllabi._time("9:05:30.123456"), "09:05")
+        self.assertEqual(syllabi._time(" 10:00 "), "10:00")
+        for bad in ("24:00:00", "12:60:00", "12:00:61", "12", "1pm", 1200, None):
+            self.assertIsNone(syllabi._time(bad), bad)
+
+    def test_event_due_after_class_on_class_day_is_not_due_before_class(self):
+        data = payload()
+        data["events"].append({"course_id": "c-pwd", "code": "15.286", "date": "2026-09-28", "time": "23:59:00",
+                               "title": "Due tonight", "type": "deadline", "source": "canvas_matched"})
+        self.fake.add(upcoming_url(3), json_body=data)
+        body = self.ok("upcoming")
+        mon = self.sessions_by_key(body)["15.286@2026-09-28"]              # class at 10:00
+        self.assertEqual(mon["due_before_class"], [])
+        self.assertFalse(mon["has_due_before_class"])
+        self.assertEqual(mon["notify_at"], "2026-09-28T06:30:00-04:00")
+        tonight = [e for e in body["events"] if e["title"] == "Due tonight"][0]
+        self.assertEqual(tonight["time"], "23:59")
+        self.assertEqual(tonight["due_at"], "2026-09-28T23:59:00-04:00")
+
+    def test_session_times_with_seconds(self):
+        data = payload(sessions=[{"course_id": "c-mas", "code": "MAS.665", "date": "2026-09-29",
+                                  "start": "13:00:00", "end": "16:00:00"}])
+        self.fake.add(upcoming_url(3), json_body=data)
+        s = self.ok("upcoming")["sessions"][0]
+        self.assertTrue(s["start_time_known"])
+        self.assertEqual(s["class_start"], "2026-09-29T13:00:00-04:00")
+        self.assertEqual(s["class_end"], "2026-09-29T16:00:00-04:00")
+
+
+KEY_SCHEMA = __import__("re").compile(r"^[^@\s]+@\d{4}-\d{2}-\d{2}$")    # prep-log.schema.json
+
+
+class SessionKeyTests(SyllabiTestCase):
+    def test_course_codes_with_spaces_make_schema_valid_keys(self):
+        data = payload()
+        data["courses"][0]["code"] = "CS 101"
+        data["sessions"][1]["code"] = None                                  # falls back to the course code
+        data["sessions"][0]["code"] = "  15 .286\tA "
+        data["sessions"].append({"course_id": "c-x", "code": "a@b c", "date": "2026-09-29", "start": "09:00", "end": None})
+        self.fake.add(upcoming_url(3), json_body=data)
+        body = self.ok("upcoming")
+        keys = [s["key"] for s in body["sessions"]]
+        self.assertIn("CS-101@2026-09-29", keys)
+        self.assertIn("15-.286-A@2026-09-28", keys)
+        self.assertIn("a-b-c@2026-09-29", keys)
+        for s in body["sessions"]:
+            self.assertRegex(s["key"], KEY_SCHEMA)
+            self.assertEqual(s["key"], "%s@%s" % (s["course"], s["class_date"]))
+        cs = self.sessions_by_key(body)["CS-101@2026-09-29"]
+        self.assertEqual(cs["course_code"], "CS 101")
+        self.assertEqual(cs["canvas_course_id"], 40577)
+
+    def test_course_slug(self):
+        self.assertEqual(syllabi.course_slug("MAS.665"), "MAS.665")
+        self.assertEqual(syllabi.course_slug("CS 101"), "CS-101")
+        self.assertEqual(syllabi.course_slug(" @ "), "course")
+
+
+class DSTTests(SyllabiTestCase):
+    """DST ends 2026-11-01 02:00 EDT. A class at 10:00 EST that day is 25 wall-clock hours after
+    10:00 EDT on Oct 31 but 24 elapsed hours after 11:00 EDT."""
+
+    def _payload(self):
+        return payload(
+            sessions=[{"course_id": "c-mas", "code": "MAS.665", "date": "2026-11-01", "start": "10:00", "end": "11:00"}],
+            events=[{"course_id": "c-mas", "code": "MAS.665", "date": "2026-11-01", "time": "08:00:00",
+                     "title": "Pre-class memo", "type": "deadline", "source": "syllabus"}])
+
+    def _check(self):
+        self.fake.add(upcoming_url(3), json_body=self._payload())
+        s = self.ok("upcoming", "--now", "2026-10-31T09:00:00-04:00")["sessions"][0]
+        self.assertEqual(s["class_start"], "2026-11-01T10:00:00-05:00")
+        self.assertTrue(s["has_due_before_class"])
+        self.assertEqual(s["notify_at"], "2026-10-31T11:00:00-04:00")        # start - 24 elapsed hours
+        self.assertEqual(s["hours_until_class"], 26.0)                       # 13:00Z -> 15:00Z next day
+        return s
+
+    def test_notify_at_and_hours_across_nov_1_with_zoneinfo(self):
+        if not HAVE_TZDATA:
+            self.skipTest("no tzdata on this machine")
+        self._check()
+
+    def test_notify_at_and_hours_across_nov_1_with_builtin_rules(self):
+        saved = sys.modules.get("zoneinfo")
+        sys.modules["zoneinfo"] = None
+        try:
+            self._check()
+        finally:
+            if saved is None:
+                del sys.modules["zoneinfo"]
+            else:
+                sys.modules["zoneinfo"] = saved
+
+    def test_spring_forward(self):
+        # DST starts 2026-03-08 02:00 EST. Class 09:00 EDT Mar 8 (13:00Z) - 24 h = 08:00 EST Mar 7,
+        # not the wall-clock 09:00.
+        data = payload(sessions=[{"course_id": "c-mas", "code": "MAS.665", "date": "2026-03-08", "start": "09:00", "end": None}],
+                       events=[{"course_id": "c-mas", "code": "MAS.665", "date": "2026-03-08", "time": None,
+                                "title": "Due at class", "type": "deadline"}])
+        self.fake.add(upcoming_url(3), json_body=data)
+        s = self.ok("upcoming", "--now", "2026-03-07T07:00:00-05:00")["sessions"][0]
+        self.assertEqual(s["class_start"], "2026-03-08T09:00:00-04:00")
+        self.assertEqual(s["notify_at"], "2026-03-07T08:00:00-05:00")
+        self.assertEqual(s["hours_until_class"], 25.0)
 
 
 # ----------------------------------------------------------------------------- course / check

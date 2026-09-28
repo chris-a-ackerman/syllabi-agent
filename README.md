@@ -7,8 +7,8 @@ Deploying means creating an agent from Maritime's OpenClaw template, cloning thi
 persistent volume, running two install scripts, and adding one Maritime wake trigger. The steps
 were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritime.md).
 
-> **Status: V0 scaffold + V5 syllabi skill.** The instructions, schemas, trigger prompts and tool
-> contracts are in place. The `syllabi` skill is implemented (SYL-96, tested against a fake
+> **Status: V0 scaffold + syllabi skill.** The instructions, schemas, trigger prompts and tool
+> contracts are in place. The `syllabi` skill is implemented (SYL-105, tested against a fake
 > endpoint, not yet run against the live app). `canvas` (SYL-93, PR #2), `nlm` (SYL-94, PR #3)
 > and `drive` (SYL-95, PR #4) are on their own branches.
 

@@ -48,7 +48,7 @@ user's timezone). Use it for eval runs; never in a scheduled job.
 ```json
 {
   "key": "MAS.665@2026-09-29",
-  "course": "MAS.665", "course_id": "…", "course_name": "AI Studio", "canvas_course_id": 40577,
+  "course": "MAS.665", "course_code": "MAS.665", "course_id": "…", "course_name": "AI Studio", "canvas_course_id": 40577,
   "class_date": "2026-09-29", "class_start": "2026-09-29T13:00:00-04:00", "class_end": "2026-09-29T16:00:00-04:00",
   "start_time_known": true, "hours_until_class": 42.0,
   "topic": null, "readings": [],
@@ -59,21 +59,28 @@ user's timezone). Use it for eval runs; never in a scheduled job.
 }
 ```
 
-- `key` is the prep-log record key (`<course>@<YYYY-MM-DD>`). Use it as-is.
+- `key` is the prep-log record key (`<course>@<YYYY-MM-DD>`). Use it as-is. `course` is the
+  key's course half: the course code with whitespace and `@` replaced by `-` ("CS 101" →
+  `CS-101`), so the key always matches the prep-log schema. `course_code` is the code as the app
+  has it, for display.
 - `class_start` / `class_end` / `notify_at` / `due_at` carry the user's timezone offset (from the
   app's `timezone`, normally `America/New_York`). Compare them as timestamps; don't redo the
   timezone maths yourself.
 - `due_before_class` lists the course's dated events that fall between now and class start
   (`no_class` events excluded). An event with no time counts as 23:59 that day, or as class start
-  when it is on the class day. `has_due_before_class` is its non-emptiness.
-- `notify_at` is AGENTS.md's rule computed for you: `class_start − 24h` when something is due
-  before class, otherwise 06:30 on class day; if that moment has passed, `now`. Write it to the
-  prep-log record as `notify_at`.
+  when it is on the class day. Event times from the app (`HH:MM:SS`) are normalized to `HH:MM`.
+  `has_due_before_class` is its non-emptiness.
+- `notify_at` is AGENTS.md's rule computed for you: `class_start − 24h` (24 elapsed hours, so
+  correct across a DST change) when something is due before class, otherwise 06:30 on class day;
+  if that moment has passed, `now`. **This skill is the source of truth for `notify_at`:** pass it
+  to `preplog upsert --notify-at` unchanged.
 - `topic` and `readings` are `null`/`[]` today: the app does not send them yet. Readings come
   from the canvas skill (its reading discovery rule); a syllabus-level reading list would appear
   here once the app exposes it.
-- `start_time_known: false` means the course schedule had no meeting time; `class_start` is then
-  midnight and you should treat the class as "sometime that day" (notify at 06:30).
+- `start_time_known: false` means the course schedule had no meeting time. The class is
+  "sometime that day": `class_start`, `class_end` and `hours_until_class` are `null`, everything
+  due by 23:59 that day counts as due before class, `notify_at` is 06:30 on class day, and the
+  session stays in the list until the day is over.
 
 ## Errors
 

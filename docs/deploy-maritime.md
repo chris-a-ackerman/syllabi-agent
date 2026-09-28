@@ -102,7 +102,7 @@ Expected: `[]`. To undo: `cp /data/openclaw.json.pre-subagent ~/.openclaw/opencl
   rules), `pip`, `notebooklm-py`, `rclone`, and whether installs survive a restart.
 - Upload secrets to `/data/secrets/` and `/data/rclone/`, and set the environment variables with
   `maritime env set` (see `.env.example`).
-- Syllabi skill (SYL-96): in the syllabi app, **Settings → Agent access → New token** (label it
+- Syllabi skill (SYL-105): in the syllabi app, **Settings → Agent access → New token** (label it
   `class-prep-repo`), then `maritime env set SYLLABI_BASE_URL=https://<ref>.supabase.co/functions/v1`
   and `SYLLABI_AGENT_TOKEN=<the token>`. In the agent chat:
   ```

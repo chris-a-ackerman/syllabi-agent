@@ -38,7 +38,7 @@ Rules for every tool:
 
 ## 1. `syllabi` skill (the syllabi app's agent endpoint, read-only)
 
-Implemented as `{baseDir}/scripts/syllabi <command> …` (`syllabi.py`), SYL-96. The app side is the
+Implemented as `{baseDir}/scripts/syllabi <command> …` (`syllabi.py`), SYL-105. The app side is the
 Supabase edge function `agent-upcoming` (syllabi repo, SYL-92/SYL-104): it accepts a scoped,
 revocable agent token minted in the app's **Settings → Agent access** card and returns the
 caller's active semester as `{timezone, courses[], sessions[], events[]}` for the next `days`
@@ -52,20 +52,29 @@ Base: `$SYLLABI_BASE_URL` = `https://<ref>.supabase.co/functions/v1`; the reques
 
 | Command | Inputs | Output (`ok: true` plus) |
 | --- | --- | --- |
-| `upcoming` | `--days N` (0–14, default 3), `--within-hours H` (prep: 48), `--now ISO` (eval runs only) | `timezone, now, days, within_hours, sessions: [{key, course, course_id, course_name, canvas_course_id, class_date, class_start, class_end, start_time_known, hours_until_class, topic, readings: [{title, url}], due_before_class: [{title, type, due_at, date, time, time_known, canvas_url, source}], has_due_before_class, notify_at}]`, `events: [{course_id, code, date, time, due_at, title, type, category, confidence, source, canvas_url}]`, `courses: [{id, code, name, canvas_course_id}]`, `timezone_fallback?` |
+| `upcoming` | `--days N` (0–14, default 3), `--within-hours H` (prep: 48), `--now ISO` (eval runs only) | `timezone, now, days, within_hours, sessions: [{key, course, course_code, course_id, course_name, canvas_course_id, class_date, class_start, class_end, start_time_known, hours_until_class, topic, readings: [{title, url}], due_before_class: [{title, type, due_at, date, time, time_known, canvas_url, source}], has_due_before_class, notify_at}]`, `events: [{course_id, code, date, time, due_at, title, type, category, confidence, source, canvas_url}]`, `courses: [{id, code, name, canvas_course_id}]`, `timezone_fallback?` |
 | `course` | `<id_or_code>` | `timezone, course: {id, code, name, canvas_course_id, schedule, grading_rules, policies}, next_sessions: [{date, start, end}]` (14-day window) |
 | `check` | | `timezone, now, courses, sessions, events` (counts), `endpoint`, `warnings?` |
 
 Semantics the agent relies on:
 
-- `key` = `<course>@<YYYY-MM-DD>`, the prep-log record key. `course` is the course code, or the
-  app's course id when the code is empty.
+- `key` = `<course>@<YYYY-MM-DD>`, the prep-log record key, matching
+  `^[^@\s]+@\d{4}-\d{2}-\d{2}$`. `course` is the course code (or the app's course id when the
+  code is empty) with whitespace and `@` replaced by `-` ("CS 101" → `CS-101`); `course_code` is
+  the unmodified code.
 - All timestamps carry the user's timezone offset (the app's `timezone`, default
-  `America/New_York`). Sessions that already started are dropped.
+  `America/New_York`). Sessions that already started are dropped. Event and session times arrive
+  as `HH:MM` or Postgres `HH:MM:SS` and are normalized to `HH:MM`.
 - `due_before_class`: the course's dated events (any `type` except `no_class`) with
   `now ≤ due_at ≤ class_start`. No time → 23:59 that day, or class start when on the class day.
-- `notify_at`: `class_start − 24h` if `has_due_before_class`, else 06:30 local on class day;
-  `now` if that has already passed. This is AGENTS.md's rule, computed once, in the right zone.
+- `notify_at`: `class_start − 24h` (elapsed, computed in UTC so a DST change doesn't shift it) if
+  `has_due_before_class`, else 06:30 local on class day; `now` if that has already passed. This
+  skill is the source of truth: `preplog upsert --notify-at` stores it as given and only falls
+  back to its own rule when the flag is absent. `hours_until_class` is elapsed hours as well.
+- No start time (`start_time_known: false`): `class_start`, `class_end` and `hours_until_class`
+  are `null`; the due window runs to 23:59 on class day; `notify_at` is 06:30 on class day; the
+  session is kept until the day is over.
+- Stable fields other skills read: `key`, `notify_at`, `has_due_before_class`, `canvas_course_id`.
 - `topic` / `readings` are `null` / `[]` until the app sends them. Readings come from the canvas skill.
 - Untrusted data: strings are capped at 1000 characters, lists at 500 items, bodies at 4 MB;
   URLs must be http(s); `schedule`/`grading_rules`/`policies` over 20k characters are replaced
