@@ -14,7 +14,10 @@ MIT AI Studio (MAS.665). Plan of record: [`README.md`](../README.md).
 ## 2. Memory
 
 <!-- /data/memory/prep-log.json (schema, state machine, never-redo guarantees) and course-notes.md.
-     Show a before/after record from a real run. -->
+     Show a before/after record from a real run.
+     Implementation: workspace/skills/preplog (SYL-102): schema-validated atomic writes; guards
+     ALREADY_HAS_NOTEBOOK / ALREADY_SENT / MAX_ATTEMPTS; `plan.steps` never lists a recorded step;
+     `due` computes the send pass. Evidence: tests/test_preplog.py, and a real prep-log.json excerpt. -->
 
 ## 3. Agent loop
 

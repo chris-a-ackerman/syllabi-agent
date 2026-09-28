@@ -101,6 +101,12 @@ Expected: `[]`. To undo: `cp /data/openclaw.json.pre-subagent ~/.openclaw/opencl
   survive a restart.
 - Upload secrets to `/data/secrets/` and `/data/rclone/`, and set the environment variables with
   `maritime env set` (see `.env.example`).
+- Smoke-test the memory tool (agent chat):
+  `Run: python3 /data/syllabi-agent/workspace/skills/preplog/scripts/preplog.py init` then
+  `Run: python3 /data/syllabi-agent/workspace/skills/preplog/scripts/preplog.py validate`.
+  Expect `created_prep_log: false` when `install-workspace.sh` already seeded the file, and
+  `sessions: 0`. Then ask the agent *"How do you record that a podcast was started, and what stops
+  you from starting a second one?"* (expect `preplog set-notebook` and `ALREADY_HAS_NOTEBOOK`).
 
 ---
 

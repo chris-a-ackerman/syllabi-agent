@@ -209,4 +209,59 @@ Validation errors (raised by the main agent):
 | `READING_LIST_CONFLICT` | syllabus and Canvas disagree (ask-a-human 2) |
 | `NEEDS_OWN_ANSWER` | deliverable needs Chris's own answer (ask-a-human 4) |
 | `TOOL_BUDGET` | 25 tool calls for this session in this run |
-| `MAX_ATTEMPTS` | 3 attempts reached; session → `needs-human` |
+| `MAX_ATTEMPTS` | 3 attempts reached; session → `needs-human` (set by `preplog begin`, §8) |
+
+---
+
+## 8. `preplog` skill (memory)
+
+The agent's durable memory as a tool: `/data/memory/prep-log.json`, the run log under
+`/data/logs/` and `/data/memory/course-notes.md`. Implemented as `{baseDir}/scripts/preplog
+<command> …` (`workspace/skills/preplog/SKILL.md` has the full command table and a worked prep
+run). Every write is validated against `workspace/memory-templates/prep-log.schema.json` (briefs
+against `brief.schema.json`), written atomically under a lock, and stamped with the
+America/New_York offset. The agent never edits these files any other way.
+
+Global options: `--trigger prep|poll|notify|human|manual` (written into `history[]`, names the
+run-log file) and `--now ISO` (evals and tests only). `<key>` is `<course>@<YYYY-MM-DD>`.
+
+| Command | Inputs | Output (`ok: true` plus) |
+| --- | --- | --- |
+| `init` | | `prep_log, created_prep_log, course_notes, created_course_notes, logs_dir` (never overwrites) |
+| `validate` | | `sessions` (count) |
+| `get <key>` | | `session`, `plan: {steps[], recorded[]}` |
+| `list` | `--status S`*, `--course C` | `count, sessions[]` (summaries) |
+| `upsert <key>` | `--class-start`, `--canvas-course-id`, `--topic`, `--has-due-before-class`, `--notify-at`, `--from-json FILE\|-` | `created, session, plan`. `notify_at` is computed by the AGENTS.md rule when omitted |
+| `begin <key>` | | `skip, reason?, attempts, plan, notify_chris?` (stop rules; counts one attempt) |
+| `add-reading <key>` | `--title --source canvas_file\|external --id-or-url` `[--local-path --drive-path --requires-login --truncated-for-brief]` | `created, reading, readings, plan` (idempotent on source + id_or_url) |
+| `add-drive-path <key> <path>` | | `added, drive_paths` |
+| `set-notebook <key> <id>` | | `changed, status_before, status` (→ `podcast-pending`) |
+| `set-podcast <key> --url` | | `changed, status_before, status` (`podcast-pending` → `ready`) |
+| `set-brief <key> --from FILE\|-` | brief JSON | `replaced, questions, plan` |
+| `set-status <key> <status>` | `--error-code --error-message --step`, `--clear-error` | `changed, status_before, status, last_error` |
+| `mark-sent <key> brief\|podcast` | `--podcast-included` | `status, brief_sent_at, podcast_sent_at` |
+| `log <key> --action A` | `--detail D` | `entry, history` (length) |
+| `due` | | `briefs[], podcast_links[], podcast_pending[], needs_human_today[], nothing_to_do` |
+| `runlog` | `--sessions --tools --decisions --outcome --line`* (needs `--trigger`) | `path, date, lines` |
+| `notes get` / `notes set` | `--course`; `--field --value [--title --append]` | `text, found?` / `line, created_section, replaced` |
+
+`plan.steps` ⊆ `find_readings, download, drive, podcast, brief`: only the work the record does not
+already show (hard rule 4). `due` is the send pass: `briefs` = `notify_at ≤ now` and no
+`brief_sent_at` (a `needs-human` record with no brief and no Drive links is left out);
+`podcast_links` = brief sent, `podcast_url` set, `podcast_sent_at` unset.
+
+| code | when | retryable | agent action |
+| --- | --- | --- | --- |
+| `NOT_FOUND` | no record for the key (`detail.known_keys`) | no | `upsert` it first |
+| `ALREADY_HAS_NOTEBOOK` | a different `notebook_id` is already recorded | no | do not call `nlm-prep`; `nlm-status` the existing notebook |
+| `ALREADY_SENT` | that `*_sent_at` guard is already set | no | do not send |
+| `BRIEF_NOT_SENT` | podcast link before the brief | no | send the brief first |
+| `BRIEF_SCHEMA_INVALID` | the brief fails `brief.schema.json` (`detail.errors`); nothing stored | no | re-prompt once with the errors, then `set-status partial` (§6) |
+| `PREPLOG_INVALID` | the write would break the schema (`detail.errors`); nothing written | no | fix the field; for `--from-json`, drop unknown keys |
+| `PREPLOG_CORRUPT` | the file is not valid JSON / not version 1; never overwritten | no | say so in the run log; Chris repairs it |
+| `SCHEMA_MISSING` | `memory-templates/` not reachable from the skill | no | run `scripts/install-workspace.sh` |
+| `USAGE` | bad arguments (key shape, dates, enums, empty values) | no | fix the call |
+
+Guards this tool enforces, so the model does not have to: one `notebook_id` per session, one
+brief send and one podcast-link send per session, `attempts` capped at 3 (`needs-human`,
+`MAX_ATTEMPTS`, `notify_chris` once), and a `plan` that never lists a recorded step.
