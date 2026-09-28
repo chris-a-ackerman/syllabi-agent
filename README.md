@@ -8,8 +8,8 @@ persistent volume, running two install scripts, and adding one Maritime wake tri
 were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritime.md).
 
 > **Status: V0 scaffold + V3 nlm skill.** The instructions, schemas, trigger prompts and tool
-> contracts are in place. The `nlm` skill is implemented (SYL-94, tested against a fake
-> notebooklm-py client, not yet run against NotebookLM). `canvas` (SYL-93, PR #2) and `drive`
+> contracts are in place. The `nlm` skill is implemented (SYL-94, a wrapper over the
+> `notebooklm` CLI, tested against a fake CLI; not yet run against NotebookLM). `canvas` (SYL-93, PR #2) and `drive`
 > (V4) land in their own tickets.
 
 ---
@@ -35,7 +35,7 @@ were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritim
 │   │   ├── canvas/SKILL.md       ← Canvas LMS reads (stub)
 │   │   ├── nlm/
 │   │   │   ├── SKILL.md          ← NotebookLM podcasts: prep / status / check, errors, agent rules
-│   │   │   └── scripts/nlm.py    ← the CLI over notebooklm-py; nlm-prep and nlm-status are symlinks to it
+│   │   │   └── scripts/nlm.py    ← wrapper over the notebooklm CLI; nlm-prep and nlm-status are symlinks to it
 │   │   └── drive/SKILL.md        ← drive-put via rclone (stub)
 │   └── memory-templates/
 │       ├── prep-log.schema.json  ← JSON Schema for /data/memory/prep-log.json
@@ -67,9 +67,9 @@ At runtime (on the Maritime volume, never in git). `HOME` is `/data`:
 ├── memory/course-notes.md        ← learned per-course quirks
 ├── logs/<YYYY-MM-DD>-<trigger>.md← one run log per trigger firing (appended)
 ├── readings/<course>/<date>/     ← downloaded PDFs
-├── podcasts/<course>/<date>.mp3  ← NotebookLM audio overviews
+├── podcasts/<course>-<date>.mp3  ← NotebookLM audio overviews
 ├── work/<course>/<date>/         ← extracted text, brief-writer input/output
-├── secrets/notebooklm-cookies.json
+├── notebooklm/                   ← NOTEBOOKLM_HOME: agent-account auth (700 / 600)
 └── rclone/rclone.conf
 ```
 
@@ -91,8 +91,9 @@ Timing: **24 hours before class** if something is due beforehand, **morning-of**
 - **Store readings:** Google Drive folder `Readings/<course>/<date>/`. iCloud has no server API;
   the iPad Files app mounts Drive, and Goodnotes imports from Drive.
 - **Goodnotes import:** *not* automatable. It takes one manual tap, and the writeup says so.
-- **NotebookLM podcast:** `notebooklm-py` (unofficial, cookie auth). There is no consumer API.
-  Cookie expiry is a real failure mode, and it is the rubric's failure-recovery test.
+- **NotebookLM podcast:** notebooklm-py's `notebooklm` CLI (unofficial). There is no consumer API.
+  Production auth is a master-token login of a dedicated agent account. A stale cookie-mode
+  `storage_state.json` is the rubric's failure-recovery test (`NLM_AUTH`).
 - **Pre-class questions:** a subagent drafts them and I review them. The agent never submits
   anything to Canvas.
 - **External readings behind logins** (HBS cases, library): the agent escalates to me on
@@ -105,7 +106,7 @@ Timing: **24 hours before class** if something is due beforehand, **morning-of**
   OpenClaw cron jobs in America/New_York** that do the work
   ([`triggers/README.md`](triggers/README.md) explains why both are needed).
 - **Only `/data` persists** across sleep/wake/restart. `HOME` is `/data`, so `~/.openclaw` (config,
-  cron jobs, workspace) persists too. All memory files, logs, secrets (NotebookLM cookies, rclone
+  cron jobs, workspace) persists too. All memory files, logs, secrets (NotebookLM auth, rclone
   config), downloaded readings and podcasts go under `/data`.
 - **30-second chat reply budget, 60 s default command timeout.** Long work runs in the background,
   so podcast generation is *started* in one run and *polled* by a later one. Over `maritime chat`,
@@ -122,15 +123,17 @@ Full contracts in [`docs/tool-contract.md`](docs/tool-contract.md).
   `get_page`. Reports 401 and 403 as separate errors.
 - **syllabi endpoint:** `GET /agent/upcoming?days=3` (sessions, topics, reading links, anything
   due, `canvas_course_id`), `GET /agent/course/:id`. Bearer agent token.
-- **`nlm-prep <course> <date> <pdf...>`** (`workspace/skills/nlm/scripts/nlm.py prep`) finds or
-  creates the notebook `"<course> — <date>"`, adds the PDFs as sources, *starts* the audio
-  overview, and returns `{notebook_id, audio: started|already-started|deferred}` at once. It
-  refuses to start a second podcast when the prep-log already has a `notebook_id`.
-  **`nlm-status <notebook_id> --course C --date D`** returns `{status: pending|ready|failed}`.
-  When the audio is ready, it has downloaded it to `/data/podcasts/<course>/<date>.m4a` and run
-  `drive-put`, returning `drive_link`. `nlm.py check` is the auth smoke test.
-  Cookies (a `notebooklm login` storage_state.json) are at `/data/secrets/notebooklm-cookies.json`;
-  their values are scrubbed from every output line. Auth failure returns error code `NLM_AUTH`.
+- **`nlm-prep <course> <date> <pdf...> --topic "<topic>"`** (`workspace/skills/nlm/scripts/nlm.py
+  prep`) is a thin wrapper over notebooklm-py's `notebooklm` CLI. It runs `auth check`, `create
+  --use`, `source add` for each PDF, and `generate audio --no-wait`, then returns
+  `{notebook_id, task_id}` at once. It refuses to start a second podcast when the prep-log
+  already has a `notebook_id`.
+  **`nlm-status <notebook_id> <task_id>`** runs `artifact poll` and returns
+  `{status: pending|ready|failed, local_path, drive_url}`. When the audio is ready, it has
+  downloaded it to `/data/podcasts/<course>-<date>.mp3` and run `drive-put`. `nlm.py check` is
+  the auth smoke test. Auth is a master-token login of a dedicated agent Google account, stored
+  in `/data/notebooklm/` (chmod 600). A stale or missing session returns exactly
+  `{"error": "NLM_AUTH"}`.
 - **`drive-put <local_path> <remote_dir>`** returns a share link, via rclone. Config is at
   `/data/rclone/rclone.conf`. Idempotent.
 - **Telegram** (Maritime channel) for briefs and questions, sent with `maritime-telegram-send`.
@@ -185,7 +188,7 @@ then marks the session partial. The main agent formats the Telegram message, not
 ### Failure recovery (rubric 5)
 
 - **Expired NotebookLM cookie:** `NLM_AUTH` → one retry → session marked `partial` → Drive links
-  + brief still sent on schedule → Telegram asks for fresh cookies → the next prep run does only
+  + brief still sent on schedule → Telegram asks for a NotebookLM re-login → the next prep run does only
   the podcast step.
 - **Canvas 403:** fall back to the syllabus link if present, else `needs-human`.
 
@@ -225,6 +228,6 @@ deploy. The full runbook is in [`docs/deploy-maritime.md`](docs/deploy-maritime.
 | new | Config persistence | `openclaw config patch` changes survive `maritime restart`; Maritime does not regenerate `openclaw.json`. |
 | new | Filesystem persistence | On restart Maritime logs "Captured derived image … Edits will survive restart", so installs outside `/data` should persist too. Confirm with the first V2 install. |
 
-Still to check: whether `python3` is 3.10+ and `pip install notebooklm-py` works on Maritime (the
-nlm skill needs both; `nlm.py check` tells you), whether `rclone` is available, and that an
+Still to check: whether `python3` is 3.10+ and `pip install "notebooklm-py[headless]"` works on
+Maritime (the nlm skill needs the `notebooklm` CLI; `nlm.py check` tells you), whether `rclone` is available, and that an
 install survives a restart.

@@ -97,23 +97,33 @@ Expected: `[]`. To undo: `cp /data/openclaw.json.pre-subagent ~/.openclaw/opencl
 
 ## 7. Still to do
 
-- Check the V2–V4 tooling: `python3`, `pip`, `notebooklm-py`, `rclone`, and whether installs
-  survive a restart. The nlm skill (SYL-94) needs Python 3.10+ and `notebooklm-py` in the same
-  `python3`. In the agent chat:
+- Check the V2–V4 tooling: `python3`, `pip`, the `notebooklm` CLI, `rclone`, and whether installs
+  survive a restart. The nlm skill (SYL-94) needs notebooklm-py's `notebooklm` CLI on `PATH`
+  (Python 3.10+). In the agent chat:
   ```
-  Run: python3 --version && python3 -m pip install --user notebooklm-py
+  Run: python3 --version && python3 -m pip install --user "notebooklm-py[headless]" && notebooklm --version
+  ```
+- NotebookLM auth (SYL-94 Security): use a **dedicated Google account for the agent** (e.g.
+  `chris.classprep@gmail.com`), never your main Gmail. A master token can mint cookies for any
+  Google service on that account. Use the same account for Drive (V4). Log in once in the
+  container so the auth lands on the volume:
+  ```
+  NOTEBOOKLM_HOME=/data/notebooklm notebooklm login --master-token --account chris.classprep@gmail.com
+  ```
+  (Alternatively, set the Maritime secret `NOTEBOOKLM_AUTH_JSON`.) Then:
+  ```
   Run: python3 /data/syllabi-agent/workspace/skills/nlm/scripts/nlm.py check
   ```
-  `check` must print `{"ok": true, "notebooks": N, ...}`. `NLM_AUTH` means the cookie file is
-  missing or stale; `NLM_NOT_INSTALLED` means the pip install did not land in that `python3`.
-  Then one real session: `nlm.py prep MAS.665 <date> /data/readings/MAS.665/<date>/<file>.pdf`,
-  and a few minutes later `nlm.py status <notebook_id> --course MAS.665 --date <date>` until it
-  says `ready` (with `drive_link: null` and `DRIVE_NOT_INSTALLED` until the drive skill lands).
-  Restart the agent afterwards and re-run `check` to confirm the install survived.
-- Upload secrets to `/data/secrets/` and `/data/rclone/`, and set the environment variables with
-  `maritime env set` (see `.env.example`). NotebookLM needs the `notebooklm login`
-  `storage_state.json` at `/data/secrets/notebooklm-cookies.json`, made on the laptop with
-  `pipx install "notebooklm-py[browser]"` and `notebooklm login`.
+  `check` must print `{"status": "ok", ...}`. `{"error": "NLM_AUTH"}` means the login is missing or
+  stale. `NLM_NOT_INSTALLED` means `notebooklm` isn't on `PATH`. `nlm.py` keeps
+  `/data/notebooklm` at mode 700 and its credential files at 600.
+- Done when (V3, live): `nlm.py prep MAS.665 <date> /data/readings/MAS.665/<date>/<file>.pdf --topic "<topic>"`
+  returns `{notebook_id, task_id}`. A few minutes later, `nlm.py status <notebook_id> <task_id>`
+  goes from `pending` to `ready`, with an mp3 in `/data/podcasts/` and a Drive link. Swapping in a
+  stale cookie-mode `storage_state.json` must yield `{"error": "NLM_AUTH"}`. Restart the agent
+  afterwards and re-run `check` to confirm the install survived.
+- Upload the rclone config to `/data/rclone/` and set the environment variables with
+  `maritime env set` (see `.env.example`).
 
 ---
 

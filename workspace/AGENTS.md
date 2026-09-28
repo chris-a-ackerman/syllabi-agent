@@ -51,9 +51,9 @@ The only reasons to contact Chris are the four cases in "Ask a human". Never wri
 | Course quirks | `/data/memory/course-notes.md` (seed from `memory-templates/course-notes.md` if missing) |
 | Run logs | `/data/logs/<YYYY-MM-DD>-<trigger>.md` (ET date; append, never overwrite) |
 | Downloaded readings | `/data/readings/<course>/<YYYY-MM-DD>/` |
-| Podcasts | `/data/podcasts/<course>/<YYYY-MM-DD>.mp3` |
+| Podcasts | `/data/podcasts/<course>-<YYYY-MM-DD>.mp3` (Drive: `ClassPrep/Podcasts/`) |
 | Scratch (extracted text, brief I/O) | `/data/work/<course>/<YYYY-MM-DD>/` |
-| NotebookLM cookies | `/data/secrets/notebooklm-cookies.json` |
+| NotebookLM auth (`NOTEBOOKLM_HOME`) | `/data/notebooklm/` (master-token login of the dedicated agent account; files chmod 600) |
 | rclone config | `/data/rclone/rclone.conf` |
 | Drive layout | `Readings/<course>/<YYYY-MM-DD>/` |
 | Repo checkout | `/data/syllabi-agent` (`skills/`, `agents/`, `memory-templates/` here are symlinks into it) |
@@ -73,14 +73,14 @@ Each skill's `SKILL.md` lists its commands and error codes (the full contract is
   reading links, what's due, `canvas_course_id`.
 - **canvas** skill (Canvas LMS, *not* OpenClaw's built-in `canvas` UI tool): `list_modules`,
   `list_files`, `download_file`, `upcoming_assignments`, `get_page`. Read-only.
-- **nlm** skill (NotebookLM via notebooklm-py):
-  `python3 skills/nlm/scripts/nlm.py prep <course> <date> <pdf>...` starts the notebook and its
-  audio overview and returns at once (it refuses to start a second podcast when the prep-log
-  already has a `notebook_id`). `nlm.py status <notebook_id> --course <course> --date <date>`
-  reports `pending` / `ready` / `failed`; on `ready` it has already downloaded the audio under
-  `/data/podcasts/` and run `drive-put`. If `ready` comes with `drive_link: null`, stay
-  `podcast-pending` and call it again on the next poll. `nlm.py check` is the auth smoke test.
-  `nlm-prep` / `nlm-status` are aliases (symlinks) for the two commands.
+- **nlm** skill (NotebookLM, a thin wrapper over notebooklm-py's `notebooklm` CLI):
+  `nlm-prep <course> <date> <pdf>... --topic "<session topic>"` creates the notebook, adds the
+  PDFs, starts the audio overview, and returns `{notebook_id, task_id}` at once. It refuses to
+  start a second podcast when the prep-log already has a `notebook_id`. `nlm-status <notebook_id>
+  <task_id>` returns `{status: pending|ready|failed, local_path, drive_url}`. On `ready` it has
+  already downloaded `/data/podcasts/<course>-<date>.mp3` and run `drive-put`. `pending` with a
+  `local_path` means the upload is still to do: call it again on the next poll.
+  `nlm.py check` is the auth smoke test. Auth failure is exactly `{"error": "NLM_AUTH"}`.
 - **drive** skill: `drive-put` (idempotent upload, returns a share link).
 - **Telegram**: when a cron job is running, nobody messaged you, so a normal reply goes nowhere.
   Send with `maritime-telegram-send "text"` (or `printf '%s' "$msg" | maritime-telegram-send -`
@@ -129,9 +129,10 @@ For each session from `GET /agent/upcoming?days=3` whose class starts in the **n
    Otherwise treat it as condition 1.
 5. **Drive.** Run `drive-put` for each local file to `Readings/<course>/<date>/`. Record the
    `drive_paths[]`.
-6. **Podcast.** If there is no `notebook_id`, run `nlm-prep` with the PDFs. Record `notebook_id`
-   and set status `podcast-pending`. On `NLM_AUTH`, retry once. If it fails again, set
-   `partial`, record `last_error`, and ask a human (condition 3). Keep going with the other steps.
+6. **Podcast.** If there is no `notebook_id`, run `nlm-prep` with the PDFs and the session
+   topic. Record `notebook_id` and `task_id`, and set status `podcast-pending`. On `NLM_AUTH`,
+   retry once. If it fails again, set `partial`, record `last_error`, and ask a human
+   (condition 3). Keep going with the other steps.
 7. **Brief.** If there is no `brief`, build the brief-writer input (see `agents/brief-writer.md`),
    spawn the subagent, and validate its output:
    - It must validate against `memory-templates/brief.schema.json`. If it does not, re-prompt once with
@@ -148,10 +149,11 @@ For each session from `GET /agent/upcoming?days=3` whose class starts in the **n
 
 ### `poll` (every 30 min, 19:30–23:00 and 05:30–09:00 ET)
 
-1. For each `podcast-pending` session, run `nlm-status`. If the result is `ready`, it has already
-   downloaded the audio and pushed it to Drive: record `podcast_url` (= `drive_link`) and advance
-   to `ready`. If `drive_link` is null, leave the session `podcast-pending` (the next poll retries
-   the upload). If the result is `failed`, set `partial` with `last_error`.
+1. For each `podcast-pending` session, run `nlm-status <notebook_id> <task_id>`. If the result
+   is `ready`, it has already downloaded the audio and pushed it to Drive: record `podcast_url`
+   (= `drive_url`) and advance to `ready`. If it is `pending` (with or without a `local_path`),
+   leave the session `podcast-pending`: the next poll retries. If the result is `failed`, set
+   `partial` with `last_error`.
 2. Then run the **send pass** (below).
 
 ### `notify` (06:30 ET)
@@ -191,8 +193,9 @@ the next session**. Do not wait for the answer. Ask in these four cases:
 1. **A reading is behind a login or returns 403** (HBS case, library proxy, Canvas 403 with no
    syllabus fallback). Ask Chris to drop the PDF into `Readings/<course>/<date>/` on Drive.
 2. **The syllabus and Canvas disagree on the reading list.** Show both lists and ask which is right.
-3. **`NLM_AUTH` after one retry.** Ask for fresh NotebookLM cookies at
-   `/data/secrets/notebooklm-cookies.json`. The brief and Drive links still go out on schedule.
+3. **`NLM_AUTH` after one retry.** Ask Chris to redo the NotebookLM master-token login for the
+   agent account (`NOTEBOOKLM_HOME=/data/notebooklm`). The brief and Drive links still go out on
+   schedule.
 4. **A pre-class deliverable needs Chris's own answer.** Send the prompt and the drafts, and say
    that Chris submits it, not the agent.
 
