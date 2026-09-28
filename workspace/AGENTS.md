@@ -68,9 +68,14 @@ Each skill's `SKILL.md` lists its commands and error codes (the full contract is
 `{"ok": true, ...}` or `{"ok": false, "error": {"code", "message", "retryable"}}`. Branch on
 `error.code`. Never guess from the message text.
 
-- **syllabi**: `GET $SYLLABI_BASE_URL/agent/upcoming?days=3` and `GET /agent/course/:id` with
-  `Authorization: Bearer $SYLLABI_AGENT_TOKEN`. This is the schedule of record: sessions, topics,
-  reading links, what's due, `canvas_course_id`.
+- **syllabi** skill (the syllabi app's agent endpoint, read-only):
+  `skills/syllabi/scripts/syllabi upcoming --days 3 --within-hours 48` returns one record per
+  upcoming class meeting: `key` (`<course>@<date>`, the prep-log key), `class_start`,
+  `canvas_course_id`, `due_before_class[]`, `has_due_before_class` and the `notify_at` you must
+  store, all with the ET offset already applied. This is the schedule of record. Readings come
+  from the canvas skill (the app does not send them yet). `syllabi course <code>` gives one
+  course's schedule and policies. `SYLLABI_401` means the agent token is dead: ask Chris once
+  (Settings → Agent access), skip planning this run. `syllabi check` is the config smoke test.
 - **canvas** skill (Canvas LMS, *not* OpenClaw's built-in `canvas` UI tool): `list_modules`,
   `list_files`, `download_file`, `upcoming_assignments`, `get_page`. Read-only.
 - **nlm** skill: `nlm-prep` (start a notebook and audio, returns at once), `nlm-status`
@@ -110,13 +115,18 @@ run that works on a session.
 
 ### `prep` (19:00 ET)
 
-For each session from `GET /agent/upcoming?days=3` whose class starts in the **next 48 hours**:
+Run `syllabi upcoming --days 3 --within-hours 48` (skill `syllabi`). It lists every class
+meeting that starts in the **next 48 hours**, keyed the way the prep-log is. On `SYLLABI_401`,
+`SYLLABI_UNAVAILABLE` (after one retry) or `SYLLABI_BAD_RESPONSE`, there is no schedule to plan
+from: write the run log with the error code, tell Chris once for `SYLLABI_401`, and stop. For
+each session it returns:
 
 1. Skip it if the status is `podcast-pending`, `ready` or `done`. If the status is `partial`
    only because of the podcast (`last_error.code == "NLM_AUTH"`), do **only** the podcast step.
 2. Read `course-notes.md` for that course before you look anything up.
-3. **Find readings.** Syllabus reading links + Canvas modules/files/pages for `canvas_course_id`.
-   Reconcile the two lists. If they disagree, ask a human (condition 2).
+3. **Find readings.** Syllabus reading links (the session's `readings[]`, when the app sends
+   any) + Canvas modules/files/pages for `canvas_course_id`. Reconcile the two lists. If they
+   disagree, ask a human (condition 2).
 4. **Download** Canvas files with `download_file` to `/data/readings/<course>/<date>/`. For
    external links: download them if they are public. If one is behind a login or returns 403,
    ask a human (condition 1). On `CANVAS_403`, fall back to the syllabus link if there is one.
@@ -135,8 +145,9 @@ For each session from `GET /agent/upcoming?days=3` whose class starts in the **n
      `HALLUCINATION: <question>`.
    - If a pre-class deliverable needs Chris's own answer (reflection, personal opinion, graded
      submission), ask a human (condition 4). Include the drafts as a starting point.
-8. **Set `notify_at`.** If anything is due before class: `class_start − 24h`. Otherwise:
-   06:30 ET on class day. If that time has already passed, use "now".
+8. **Set `notify_at`.** Copy the session's `notify_at` from `syllabi upcoming`: it is
+   `class_start − 24h` if anything is due before class, otherwise 06:30 ET on class day, and
+   "now" if that time has already passed. Copy `has_due_before_class` too.
 9. Write the record. Status: `podcast-pending` if audio is in flight, `ready` if everything is
    in hand, otherwise keep `partial`/`needs-human`.
 

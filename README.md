@@ -7,8 +7,10 @@ Deploying means creating an agent from Maritime's OpenClaw template, cloning thi
 persistent volume, running two install scripts, and adding one Maritime wake trigger. The steps
 were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritime.md).
 
-> **Status: V0 scaffold.** The instructions, schemas, trigger prompts and tool contracts are in
-> place. The skill scripts (`canvas`, `nlm`, `drive`) are stubs, to be filled in by V2–V4.
+> **Status: V0 scaffold + V5 syllabi skill.** The instructions, schemas, trigger prompts and tool
+> contracts are in place. The `syllabi` skill is implemented (SYL-96, tested against a fake
+> endpoint, not yet run against the live app). `canvas` (SYL-93, PR #2), `nlm` (SYL-94, PR #3)
+> and `drive` (SYL-95, PR #4) are on their own branches.
 
 ---
 
@@ -30,6 +32,9 @@ were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritim
 │   ├── agents/
 │   │   └── brief-writer.md       ← subagent definition: role, bounded context, output contract
 │   ├── skills/
+│   │   ├── syllabi/
+│   │   │   ├── SKILL.md          ← the schedule of record: upcoming / course / check, errors, agent rules
+│   │   │   └── scripts/syllabi.py← the CLI over the app's agent-upcoming endpoint; `syllabi` is a symlink
 │   │   ├── canvas/SKILL.md       ← Canvas LMS reads (stub)
 │   │   ├── nlm/SKILL.md          ← nlm-prep / nlm-status for NotebookLM (stub)
 │   │   └── drive/SKILL.md        ← drive-put via rclone (stub)
@@ -46,6 +51,8 @@ were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritim
 │   ├── deploy-maritime.md        ← verified deploy runbook + what we learned about Maritime
 │   ├── tool-contract.md          ← every tool: name, inputs, outputs, error shape
 │   └── hw2-writeup.md            ← HW2 writeup skeleton (one heading per rubric item)
+├── tests/
+│   └── test_syllabi.py           ← syllabi skill tests, no network: python3 -m unittest discover -s tests
 └── evidence/
     ├── eval/cases.md             ← the 5 eval cases, baseline vs improved (results blank)
     └── failures/                 ← screenshots/logs of failures and recoveries
@@ -114,8 +121,13 @@ Full contracts in [`docs/tool-contract.md`](docs/tool-contract.md).
 - **`canvas` skill** (or `vishalsachdev/canvas-mcp` as an MCP server if the template supports it):
   `list_modules`, `list_files`, `download_file` → `/data/readings/`, `upcoming_assignments`,
   `get_page`. Reports 401 and 403 as separate errors.
-- **syllabi endpoint:** `GET /agent/upcoming?days=3` (sessions, topics, reading links, anything
-  due, `canvas_course_id`), `GET /agent/course/:id`. Bearer agent token.
+- **`syllabi` skill** (`workspace/skills/syllabi/scripts/syllabi.py`): `upcoming --days 3
+  --within-hours 48` calls the syllabi app's `agent-upcoming` edge function with a scoped,
+  revocable agent token (minted in the app's Settings → Agent access) and returns one record per
+  upcoming class meeting: the prep-log `key`, `class_start`, `canvas_course_id`, what is
+  `due_before_class`, and the `notify_at` the agent must store, all in ET. `course <code>` gives
+  one course's schedule and policies; `check` is the auth smoke test. Auth failure is
+  `SYLLABI_401`. The app does not send reading links yet, so readings come from Canvas.
 - **`nlm-prep <course> <date> <pdf...>`** creates a notebook, adds sources, *starts* the audio
   overview, and returns `{notebook_id}` immediately.
   **`nlm-status <notebook_id>`** returns `{status: pending|ready|failed, audio_url?}`. When the

@@ -36,43 +36,54 @@ Rules for every tool:
 
 ---
 
-## 1. syllabi endpoint (HTTP)
+## 1. `syllabi` skill (the syllabi app's agent endpoint, read-only)
 
-Auth: `Authorization: Bearer $SYLLABI_AGENT_TOKEN`. Base: `$SYLLABI_BASE_URL`.
+Implemented as `{baseDir}/scripts/syllabi <command> …` (`syllabi.py`), SYL-96. The app side is the
+Supabase edge function `agent-upcoming` (syllabi repo, SYL-92/SYL-104): it accepts a scoped,
+revocable agent token minted in the app's **Settings → Agent access** card and returns the
+caller's active semester as `{timezone, courses[], sessions[], events[]}` for the next `days`
+days (0–14). There is no separate course endpoint; `syllabi course` filters the same payload.
 
-### `GET /agent/upcoming?days=3`
+Auth: `Authorization: Bearer $SYLLABI_AGENT_TOKEN` (`syl_agent_…`, scope `read:upcoming`).
+Base: `$SYLLABI_BASE_URL` = `https://<ref>.supabase.co/functions/v1`; the request is
+`GET <base>/agent-upcoming?days=N` (`SYLLABI_UPCOMING_PATH` overrides the path; the plan's
+`/agent/upcoming` spelling is not what Supabase serves). `SYLLABI_ANON_KEY`, if set, is sent as
+`apikey`. Optional `SYLLABI_TIMEOUT` (default 20 s).
 
-Output (expected shape; confirm against the syllabi app):
-
-```json
-{
-  "sessions": [
-    {
-      "course": "MAS.665",
-      "course_id": "…",
-      "canvas_course_id": 12345,
-      "class_date": "2026-09-29",
-      "class_start": "2026-09-29T13:00:00-04:00",
-      "topic": "…",
-      "readings": [{ "title": "…", "url": "…", "canvas_file_id": 678 }],
-      "due": [{ "title": "Pre-class questions 4", "due_at": "2026-09-28T23:59:00-04:00", "canvas_assignment_id": 901 }]
-    }
-  ]
-}
-```
-
-### `GET /agent/course/:id`
-
-Output: course metadata (`course`, `title`, `canvas_course_id`, `schedule[]`, `reading_policy?`).
-
-| code | when | retryable |
+| Command | Inputs | Output (`ok: true` plus) |
 | --- | --- | --- |
-| `SYLLABI_401` | token missing/invalid | no: ask Chris |
-| `SYLLABI_UNAVAILABLE` | 5xx / timeout / network | yes (once) |
-| `SYLLABI_BAD_RESPONSE` | body doesn't match the expected shape | no: log it and skip the run |
+| `upcoming` | `--days N` (0–14, default 3), `--within-hours H` (prep: 48), `--now ISO` (eval runs only) | `timezone, now, days, within_hours, sessions: [{key, course, course_id, course_name, canvas_course_id, class_date, class_start, class_end, start_time_known, hours_until_class, topic, readings: [{title, url}], due_before_class: [{title, type, due_at, date, time, time_known, canvas_url, source}], has_due_before_class, notify_at}]`, `events: [{course_id, code, date, time, due_at, title, type, category, confidence, source, canvas_url}]`, `courses: [{id, code, name, canvas_course_id}]`, `timezone_fallback?` |
+| `course` | `<id_or_code>` | `timezone, course: {id, code, name, canvas_course_id, schedule, grading_rules, policies}, next_sessions: [{date, start, end}]` (14-day window) |
+| `check` | | `timezone, now, courses, sessions, events` (counts), `endpoint`, `warnings?` |
 
-(Called over HTTP rather than through a skill script. The agent maps HTTP failures to these codes
-in its log and prep-log.)
+Semantics the agent relies on:
+
+- `key` = `<course>@<YYYY-MM-DD>`, the prep-log record key. `course` is the course code, or the
+  app's course id when the code is empty.
+- All timestamps carry the user's timezone offset (the app's `timezone`, default
+  `America/New_York`). Sessions that already started are dropped.
+- `due_before_class`: the course's dated events (any `type` except `no_class`) with
+  `now ≤ due_at ≤ class_start`. No time → 23:59 that day, or class start when on the class day.
+- `notify_at`: `class_start − 24h` if `has_due_before_class`, else 06:30 local on class day;
+  `now` if that has already passed. This is AGENTS.md's rule, computed once, in the right zone.
+- `topic` / `readings` are `null` / `[]` until the app sends them. Readings come from the canvas skill.
+- Untrusted data: strings are capped at 1000 characters, lists at 500 items, bodies at 4 MB;
+  URLs must be http(s); `schedule`/`grading_rules`/`policies` over 20k characters are replaced
+  by `{"truncated": true, "chars"}`.
+
+| code | when | retryable | agent action |
+| --- | --- | --- | --- |
+| `SYLLABI_401` | HTTP 401/403: token missing, malformed, expired, revoked, wrong scope | no | skip planning this run; ask Chris once for a new token (Settings → Agent access) |
+| `SYLLABI_NOT_FOUND` | HTTP 404 (wrong base URL / function not deployed); `course` with no match (`detail.known_codes`) | no | configuration: tell Chris |
+| `SYLLABI_BAD_REQUEST` | HTTP 400/405/422 | no | a bug: log it |
+| `SYLLABI_RATE_LIMIT` | 429 twice (one `Retry-After` wait ≤ 5 s already done) | yes (next run) | |
+| `SYLLABI_UNAVAILABLE` | 5xx / timeout / network / non-JSON body / refused redirect | yes (once), except the redirect | then skip planning and log it |
+| `SYLLABI_BAD_RESPONSE` | JSON, but not the expected shape; body > 4 MB | no | log it and skip the run; the app changed |
+| `USAGE` | bad arguments or configuration | no | fix the call |
+
+Security rules (requirements): GET only; https only; the token goes to `SYLLABI_BASE_URL`'s host
+and nowhere else (3xx is refused, never followed); the token and anon key are scrubbed from every
+output line, crash output included; `-v` logs `GET <path>` without query strings or headers.
 
 ---
 

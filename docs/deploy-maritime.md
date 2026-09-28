@@ -97,10 +97,22 @@ Expected: `[]`. To undo: `cp /data/openclaw.json.pre-subagent ~/.openclaw/opencl
 
 ## 7. Still to do
 
-- Check the V2–V4 tooling: `python3`, `pip`, `notebooklm-py`, `rclone`, and whether installs
-  survive a restart.
+- Check the V2–V5 tooling: `python3` (the syllabi skill needs only that; `python3 -c "import
+  zoneinfo"` tells you whether tzdata is there, otherwise the skill uses its built-in Eastern
+  rules), `pip`, `notebooklm-py`, `rclone`, and whether installs survive a restart.
 - Upload secrets to `/data/secrets/` and `/data/rclone/`, and set the environment variables with
   `maritime env set` (see `.env.example`).
+- Syllabi skill (SYL-96): in the syllabi app, **Settings → Agent access → New token** (label it
+  `class-prep-repo`), then `maritime env set SYLLABI_BASE_URL=https://<ref>.supabase.co/functions/v1`
+  and `SYLLABI_AGENT_TOKEN=<the token>`. In the agent chat:
+  ```
+  Run: python3 /data/syllabi-agent/workspace/skills/syllabi/scripts/syllabi.py check
+  Run: python3 /data/syllabi-agent/workspace/skills/syllabi/scripts/syllabi.py upcoming --days 3 --within-hours 48
+  ```
+  `check` must print `{"ok": true, "timezone": "America/New_York", "courses": N, ...}`. A
+  `SYLLABI_401` with a fresh token means the gateway wants the anon key too: set
+  `SYLLABI_ANON_KEY`. `SYLLABI_NOT_FOUND` means the base URL is wrong or `agent-upcoming` is not
+  deployed. Then revoke the token in the app and re-run `check`: it must now fail with `SYLLABI_401`.
 
 ---
 
