@@ -106,6 +106,13 @@ Expected: `[]`. To undo: `cp /data/openclaw.json.pre-subagent ~/.openclaw/opencl
   ```
 - Upload secrets to `/data/secrets/` and `/data/rclone/`, and set the environment variables with
   `maritime env set` (see `.env.example`).
+- Smoke-test the brief skill (agent chat):
+  `Run: python3 /data/syllabi-agent/workspace/skills/brief/scripts/brief.py prompt` (expect the
+  brief-writer prompt, read from the workspace's `agents/brief-writer.md`), then
+  `Run: which pdftotext; python3 -c "import pypdf"` to learn which PDF extractor the container
+  has (the built-in fallback handles text PDFs, not scans). Then ask the agent *"How do you check
+  the brief-writer's reply before you store it?"* (expect `brief validate`, the schema and the
+  ≥ 0.9 fuzzy check).
 - Smoke-test the memory tool (agent chat):
   `Run: python3 /data/syllabi-agent/workspace/skills/preplog/scripts/preplog.py init` then
   `Run: python3 /data/syllabi-agent/workspace/skills/preplog/scripts/preplog.py validate`.

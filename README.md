@@ -9,6 +9,9 @@ were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritim
 
 > **Status: V0 scaffold.** The instructions, schemas, trigger prompts and tool contracts are in
 > place. The skill scripts (`canvas`, `nlm`, `drive`) are stubs, to be filled in by V2–V4.
+> The `brief` skill (SYL-96) is implemented and tested: the brief-writer input bundle under the
+> 40k-token cap, the reply validation (schema + fuzzy ≥ 0.9 hallucination filter) and the
+> Telegram formatting; so is the standalone `pdf-text` helper it shares its extractor with.
 > The `preplog` memory skill (SYL-100, memory half) is implemented and tested: the prep-log state machine with
 > its never-redo guards, the run log and course-notes edits.
 
@@ -37,6 +40,12 @@ were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritim
 │   │   │   └── scripts/canvas.py ← the CLI (stdlib Python, GET only); scripts/canvas is a symlink to it
 │   │   ├── nlm/SKILL.md          ← nlm-prep / nlm-status for NotebookLM (stub)
 │   │   ├── drive/SKILL.md        ← drive-put via rclone (stub)
+│   │   ├── brief/                ← brief-writer pipeline: bundle, validate, format (SYL-96)
+│   │   │   ├── SKILL.md
+│   │   │   └── scripts/brief.py    (+ `brief` symlink)
+│   │   └── pdf-text/             ← PDF → text (pdftotext → pypdf → built-in), reuses brief.py's extractor
+│   │       ├── SKILL.md
+│   │       └── scripts/pdf_text.py (+ `pdf-text` symlink)
 │   │   └── preplog/              ← memory tool: prep-log state machine, run log, course notes (SYL-100, memory half)
 │   │       ├── SKILL.md
 │   │       └── scripts/preplog.py  (+ `preplog` symlink)
@@ -54,6 +63,8 @@ were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritim
 │   ├── tool-contract.md          ← every tool: name, inputs, outputs, error shape
 │   └── hw2-writeup.md            ← HW2 writeup skeleton (one heading per rubric item)
 ├── tests/
+│   ├── test_brief.py             ← unit tests for the brief skill (no network): python3 -m unittest discover -s tests
+│   └── test_pdf_text.py          ← unit tests for the pdf-text helper
 │   └── test_preplog.py           ← unit tests for the preplog skill (no network): python3 -m unittest discover -s tests
 │   └── test_canvas.py            ← canvas skill tests, no network: python3 -m unittest discover -s tests
 └── evidence/
@@ -189,6 +200,17 @@ The main agent validates it against [`brief.schema.json`](workspace/memory-templ
 Every `pre_class_questions[].question` must appear (fuzzy ≥ 0.9) in the Canvas text; otherwise
 it is dropped and logged as a hallucination. On schema failure the main agent re-prompts once,
 then marks the session partial. The main agent formats the Telegram message, not the subagent.
+
+The mechanics live in the **`brief` skill** ([`workspace/skills/brief/SKILL.md`](workspace/skills/brief/SKILL.md)):
+`brief bundle` builds the task text under the cap (Canvas text whole, readings split evenly, each
+cut reading ending in `[TRUNCATED: kept first N of M characters]`) and records the Canvas text it
+used; `brief validate` extracts the JSON, checks the schema, scores every question against that
+recorded Canvas text with `difflib` (whole sentences/lines only, at least 4 words, numbers,
+negations and content words must match exactly) and drops the ones under 0.9 as `HALLUCINATION:` lines, and
+hands back the re-prompt text on the first schema failure; `brief format` renders the Telegram
+brief (drafts marked as drafts, Drive links, podcast link or "podcast pending") within Telegram's
+4096-character limit. Tests: `python3 -m unittest discover -s tests`
+([`tests/test_brief.py`](tests/test_brief.py)).
 
 ### Failure recovery (rubric 5)
 
