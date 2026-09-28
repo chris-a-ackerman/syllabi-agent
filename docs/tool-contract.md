@@ -30,9 +30,12 @@ Rules for every tool:
 - It never prints tokens, cookies or config contents, including in `message`.
 - Write operations (download, upload) are idempotent: rerunning one returns the same result
   and does not duplicate the work.
-- A timeout counts as an error (`*_UNAVAILABLE`, `retryable: true`), never a hang. Each call must
-  finish well within the 30-second reply budget. The only long job (audio generation) runs
-  asynchronously.
+- A timeout counts as a retryable network error, never a hang: `CANVAS_NET` for canvas; other
+  tools use the network code in their own table below. Every API call has a 20 s timeout, inside
+  the 30-second reply budget. File transfers are capped by Maritime's 60 s per-command exec limit:
+  `canvas download` has a 50 s **total** deadline (all redirect hops plus the body), not a
+  per-socket timeout, and returns `CANVAS_NET` (`retryable: true`) when it runs out. The only long
+  job (audio generation) runs asynchronously.
 
 ---
 
@@ -98,28 +101,42 @@ output line, crash output included; `-v` logs `GET <path>` without query strings
 
 ## 2. `canvas` skill (read-only)
 
-Implemented as `{baseDir}/scripts/canvas <op> …`, or as the equivalent tools from
-`vishalsachdev/canvas-mcp` mounted as an MCP server. Either way, the ops, outputs and error codes
-are the ones below.
+Implemented as `workspace/skills/canvas/scripts/canvas.py` (SYL-93; `scripts/canvas` is a symlink
+to it), a standard-library Python CLI over the Canvas REST API: base `$CANVAS_BASE_URL/api/v1`,
+header `Authorization: Bearer $CANVAS_TOKEN` (`CANVAS_API_TOKEN` is an alias), `per_page=100`,
+every `Link: rel="next"` page followed. `canvas-mcp` was not used: whether the OpenClaw template
+can host a Python MCP server is unverified, and these are six GET endpoints.
 
-| Op | Inputs | Output (`ok: true` plus) |
-| --- | --- | --- |
-| `list_modules` | `course_id` | `modules: [{id, name, position, items: [{id, title, type, content_id?, page_url?, external_url?}]}]` |
-| `list_files` | `course_id`, `folder?` | `files: [{id, display_name, filename, size, content_type, updated_at, folder}]` |
-| `download_file` | `file_id`, `dest_dir` (under `/data/readings/`) | `file_id, local_path, bytes, sha256, skipped` |
-| `upcoming_assignments` | `course_id`, `days?` (default 7) | `assignments: [{id, name, due_at, html_url, description_text, submission_types[]}]` |
-| `get_page` | `course_id`, `page_url` | `page: {url, title, body_text, updated_at}` |
+| Op | Inputs | Canvas endpoint | Output (`ok: true` plus) |
+| --- | --- | --- | --- |
+| `modules` | `course_id` | `GET /courses/{id}/modules?include[]=items&include[]=content_details` (+ `/modules/{mid}/items` when Canvas omits items) | `items: [{module, module_id, position, item_position, item_type, title, id, content_id, url, html_url, page_url, external_url, published, content_type, size, locked_for_user}]`, `modules` (count) |
+| `files` | `course_id`, `--folder <path>?` | `GET /courses/{id}/files?sort=updated_at&order=desc` + `GET /courses/{id}/folders` | `files: [{id, display_name, filename, content_type, size, updated_at, folder, folder_id, locked_for_user}]`; `folders_error` if the folder lookup failed |
+| `download` | `course_id`, `file_id`, `dest_dir` (under `$DATA_DIR/readings/`) | `GET /courses/{id}/files/{file_id}`, then its pre-signed `url` | `path, bytes, sha256, skipped, file_id, display_name, content_type`. Streams to `<name>.part` (deleted on failure), then renames. `dest_dir/.canvas-manifest.json` records `{file_id, updated_at, bytes, sha256}` per name: same `file_id`, same `updated_at` and size → `skipped: true`, nothing fetched. A name held by another file id (or a file the tool didn't write) is never overwritten; the new file becomes `<root>-<file_id><ext>` |
+| `assignments` | `course_id`, `--upcoming?` | `GET /courses/{id}/assignments?include[]=submission[&bucket=upcoming]` | `assignments: [{id, name, due_at, html_url, description_text, links: [{text, href}], submission_types[], submitted}]`. `description_text` is full length, HTML stripped |
+| `page` | `course_id`, `page_url_or_id` | `GET /courses/{id}/pages/{url}` | `page: {url, title, body_text, links, updated_at, html_url}` |
+| `whoami` | | `GET /users/self` | `user: {id, name}` |
 
-No write ops exist, by design.
+V0 aliases: `list_modules`, `list_files`, `download_file`, `upcoming_assignments` (= `assignments --upcoming`), `get_page`.
+
+No write ops exist, by design. Security rules the implementation enforces (SYL-93):
+`display_name` is sanitized to `[A-Za-z0-9._ -]` (leading dots stripped, empty rejected) before
+anything is written under `dest_dir`; the token goes only to `CANVAS_BASE_URL`'s host and never on
+a redirect; `Link: rel="next"` pages are followed only when https on that same host; redirects
+must be https and must not resolve to private/loopback/link-local addresses;
+`-v` logs `<method> <path>` only.
 
 | code | when | retryable | agent action |
 | --- | --- | --- | --- |
-| `CANVAS_401` | token missing/expired/revoked | no | stop Canvas calls this run; ask Chris to refresh the token |
-| `CANVAS_403` | authenticated but forbidden | no | fall back to the syllabus link, else `needs-human` (ask-a-human condition 1) |
+| `CANVAS_401` | token missing/expired/revoked: a 401 with a `WWW-Authenticate` header or a body naming the token | no | stop Canvas calls this run; ask Chris to refresh the token |
+| `CANVAS_403` | authenticated but forbidden, or the file is locked (includes Canvas's permissions 401 "user not authorized", reported with `status: 401`) | no | fall back to the syllabus link, else `needs-human` (ask-a-human condition 1) |
 | `CANVAS_404` | not found | no | log it, note it in course-notes |
-| `CANVAS_RATE_LIMIT` | 429 | yes | retry once after a pause |
-| `CANVAS_UNAVAILABLE` | 5xx / timeout | yes | retry once |
-| `FILE_TOO_LARGE` | > 100 MB | no | skip it; include the Canvas link in the brief |
+| `CANVAS_RATE` | 429 (or Canvas's 403 "Rate Limit Exceeded") twice; the tool already waited `Retry-After` (≤ 5 s) and retried once | yes (next run) | leave it |
+| `CANVAS_NET` | 5xx / timeout / non-JSON body / 50 s download deadline exceeded (`retryable: true`); refused redirect or unexpected 4xx (`retryable: false`) | see `retryable` | retry once if retryable |
+| `FILE_TOO_LARGE` | > 100 MB | no | skip it; include `detail.canvas_url` in the brief |
+| `BAD_FILENAME` | the Canvas file name sanitizes to nothing | no | skip it; tell Chris |
+| `USAGE` | bad arguments/config, `dest_dir` outside `$DATA_DIR/readings/` | no | a bug in the call |
+
+Tests (no network, fake transport): `python3 -m unittest discover -s tests`.
 
 ---
 
@@ -219,6 +236,53 @@ Validation errors (raised by the main agent):
 | `BRIEF_SCHEMA_INVALID` | failed schema validation twice (original + one re-prompt) | `partial`; send Drive links + podcast without a brief |
 | `BRIEF_HALLUCINATED_QUESTION` | a question's fuzzy match to the Canvas text is < 0.9 | drop that question, log `HALLUCINATION: …` (not a session failure) |
 
+### `brief` skill (the pipeline around the subagent)
+
+Implemented as `{baseDir}/scripts/brief <command> …` (`workspace/skills/brief/SKILL.md` has the
+full command table and a worked prep run). It builds the bundle, checks the reply and formats the
+Telegram text; the main agent still spawns the subagent itself. Work files live under
+`/data/work/<course>/<date>/`. `<key>` is `<course>@<YYYY-MM-DD>`.
+
+| Command | Inputs | Output (`ok: true` plus) |
+| --- | --- | --- |
+| `bundle <key>` | `--session FILE\|-` (row or `syllabi upcoming` output), `--canvas FILE`* (`canvas assignments`/`page` JSON, `{title,url,text}`, or text; `--assignment-id ID`* filters), `--readings-json FILE` (record / `preplog get` output / list) or `--reading PATH`*, `--notes FILE\|-`, `--cap-chars N`, `--print` | `task_path` (`brief-input.md`: prompt head from `agents/brief-writer.md` + `## SESSION`, `## CANVAS TEXT` (`### CANVAS: <title> (<url>)`), `## READINGS` (`### READING: <title>`, cut ones end `[TRUNCATED: kept first N of M characters]`), `## COURSE NOTES`), `sidecar_path` (`brief-input.json`), `task_name`, `chars, est_tokens, cap_chars, canvas[], readings[], skipped[], truncated[], warnings[]` |
+| `validate <key>` | `--reply FILE\|-`, `--attempt N`, `--threshold R`, `--canvas FILE`* (override) | `attempt, brief_path` (`brief-output.json`, the cleaned brief), `reply_path`, `questions {returned, kept, dropped}`, `kept[] {question, score, source, source_ok, source_original?}`, `dropped[] {question, score, best_match, reason, log_line}`, `log_lines[]`, `warnings[]` |
+| `format <key>` | `--record FILE\|-`, `--brief FILE`, `--drive-link URL`*, `--podcast-url URL`, `--no-podcast`, `--dropped N` | `text, parts[], paths[]` (`brief-telegram.txt`, `.2.txt`…), `send_with[]`, `has_brief, brief_source, questions, drive_links[], podcast: ready\|pending\|unavailable, includes_podcast, dropped` |
+| `format-podcast <key>` | `--url URL`, `--record FILE\|-` | `text` ("🎧 podcast ready: <link>" + course and class time), `path` |
+| `prompt` | | `prompt, source` (the blockquote under "## Prompt" in `agents/brief-writer.md`) |
+| `score` | `--question TEXT`, `--canvas FILE`*, `--threshold R` | `score, best_match, kept` |
+
+Rules the tool enforces: the bundle never exceeds the cap (`BRIEF_CAP_CHARS`, default 160000
+characters ≈ 40k tokens); Canvas text is kept whole and readings share the rest evenly; the
+Canvas text used by `validate` is the sidecar's copy, never text parsed back out of the bundle (a
+reading with a fake `### CANVAS:` header is indented, not promoted); inputs may not come from
+`/data/secrets/` or `/data/rclone/`, readings only from `/data/readings/` or `/data/work/`; the
+cleaned brief holds only the schema's fields and only the questions that scored ≥ the threshold.
+A question is scored against whole Canvas sentences/lines (never a fragment), needs ≥ 4 words, and
+is rejected at any threshold when a number, a negation or a content word differs. Content lines
+starting with `#`, `---` or `[TRUNCATED` are indented so they cannot forge bundle structure.
+`bundle` clears the previous run's replies and validation files (`cleared[]`), so attempt
+numbering restarts at 1. Telegram length is counted in UTF-16 code units.
+
+### `pdf-text` skill
+
+`{baseDir}/scripts/pdf-text <pdf> [--json] [--out FILE]` (`workspace/skills/pdf-text/SKILL.md`):
+the text of a PDF under `/data/readings/` or `/data/work/`, via `pdftotext` → `pypdf` → the
+built-in extractor (the same chain `brief bundle` uses). Plain text on stdout by default; with
+`--json`: `{ok, path, extractor, chars, warning, text}` (`out` instead of `text` with `--out`,
+which must be under `/data/work/`). Errors are always the JSON envelope, exit 2: `USAGE` (bad
+arguments or path), `NOT_FOUND`, `NOT_PDF` (no `%PDF-` header, e.g. a saved login page). None
+retryable.
+
+| code | when | retryable | agent action |
+| --- | --- | --- | --- |
+| `BRIEF_SCHEMA_INVALID` | no JSON object in the reply, or it fails the schema (`detail.errors`, `detail.attempt`, `detail.reprompt`, `detail.next`); nothing stored | no | attempt 1: spawn again with `detail.reprompt` appended; attempt 2: `partial` (§6 above) |
+| `NO_BUNDLE` | `validate` without a prior `bundle` for the key and no `--canvas` | no | run `bundle` |
+| `PROMPT_MISSING` / `SCHEMA_MISSING` | `agents/brief-writer.md` / `memory-templates/brief.schema.json` not reachable | no | run `scripts/install-workspace.sh` |
+| `USAGE` | bad key, forbidden path, unknown Canvas JSON shape, session file without this key | no | fix the call |
+
+A dropped question is reported in `dropped[]` / `log_lines[]` and is not an error.
+
 ---
 
 ## 7. Agent-level codes (in `last_error`, not emitted by tools)
@@ -229,4 +293,63 @@ Validation errors (raised by the main agent):
 | `READING_LIST_CONFLICT` | syllabus and Canvas disagree (ask-a-human 2) |
 | `NEEDS_OWN_ANSWER` | deliverable needs Chris's own answer (ask-a-human 4) |
 | `TOOL_BUDGET` | 25 tool calls for this session in this run |
-| `MAX_ATTEMPTS` | 3 attempts reached; session → `needs-human` |
+| `MAX_ATTEMPTS` | 3 attempts reached; session → `needs-human` (set by `preplog begin`, see the `preplog` section below) |
+
+---
+
+## 8. `preplog` skill (memory)
+
+The agent's durable memory as a tool: `/data/memory/prep-log.json`, the run log under
+`/data/logs/` and `/data/memory/course-notes.md`. Implemented as `{baseDir}/scripts/preplog
+<command> …` (`workspace/skills/preplog/SKILL.md` has the full command table and a worked prep
+run). Every write is validated against `workspace/memory-templates/prep-log.schema.json` (briefs
+against `brief.schema.json`), written atomically under a lock, and stamped with the
+America/New_York offset. The agent never edits these files any other way.
+
+Global options: `--trigger prep|poll|notify|human|manual` (written into `history[]`, names the
+run-log file) and `--now ISO` (evals and tests only). `<key>` is `<course>@<YYYY-MM-DD>`.
+
+| Command | Inputs | Output (`ok: true` plus) |
+| --- | --- | --- |
+| `init` | | `prep_log, created_prep_log, course_notes, created_course_notes, logs_dir` (never overwrites) |
+| `validate` | | `sessions` (count) |
+| `get <key>` | | `session`, `plan: {steps[], recorded[]}` |
+| `list` | `--status S`*, `--course C` | `count, sessions[]` (summaries) |
+| `upsert <key>` | `--class-start`, `--canvas-course-id`, `--topic`, `--has-due-before-class`, `--notify-at`, `--from-json FILE\|-` | `created, changed, session, plan`. No write at all when nothing changed. `--notify-at` (from the syllabi skill) wins; without it `notify_at` is computed by the AGENTS.md rule for a new record and recomputed when `class_start` / `has_due_before_class` change. `class_start` must fall on the key's ET date. `--from-json` may not set `history, attempts, notebook_id, status, *_sent_at, podcast_url, brief, last_error` |
+| `begin <key>` | | `skip, reason?, attempts, plan, notify_chris?` (stop rules: skips `podcast-pending, ready, notified-partial, done, needs-human`; counts one attempt) |
+| `add-reading <key>` | `--title --source canvas_file\|external --id-or-url` `[--local-path --drive-path --requires-login --truncated-for-brief]` | `created, reading, readings, plan` (idempotent on source + id_or_url) |
+| `add-drive-path <key> <path>` | | `added, drive_paths` |
+| `set-notebook <key> <id>` | | `changed, status_before, status` (→ `podcast-pending`) |
+| `set-podcast <key> --url` | | `changed, status_before, status, send?` (`podcast-pending` → `ready`; `notified-partial` stays, `send: "podcast-link-only"`) |
+| `set-brief <key> --from FILE\|-` | brief JSON | `replaced, questions, plan` |
+| `set-status <key> <status>` | `--error-code --error-message --step`, `--clear-error`, `--reset-attempts` (with `pending`, `--trigger human\|manual` only) | `changed, status_before, status, attempts, last_error` |
+| `mark-sent <key> brief\|podcast` | `--podcast-included` | `status, brief_sent_at, podcast_sent_at` (`brief` alone → `notified-partial`; with the link, or `podcast` → `done`) |
+| `log <key> --action A` | `--detail D` | `entry, history` (length) |
+| `due` | | `briefs[], podcast_links[], podcast_pending[], needs_human_today[], nothing_to_do` |
+| `runlog` | `--sessions --tools --decisions --outcome --line`* (needs `--trigger`) | `path, date, lines` |
+| `notes get` / `notes set` | `--course`; `--field --value [--title --append]` | `text, found?` / `line, created_section, replaced` |
+
+`plan.steps` ⊆ `find_readings, download, drive, podcast, brief`: only the work the record does not
+already show (hard rule 4). `due` is the send pass: `briefs` = `notify_at ≤ now` and no
+`brief_sent_at` (a `needs-human` record with no brief and no Drive links is left out);
+`podcast_links` = brief sent, `podcast_url` set, `podcast_sent_at` unset (`send: "podcast-link-only"`);
+`podcast_pending` = `podcast-pending`, plus `notified-partial` records with a `notebook_id` and no
+`podcast_url` (their audio is still in flight).
+
+| code | when | retryable | agent action |
+| --- | --- | --- | --- |
+| `NOT_FOUND` | no record for the key (`detail.known_keys`) | no | `upsert` it first |
+| `ALREADY_HAS_NOTEBOOK` | a different `notebook_id` is already recorded | no | do not call `nlm-prep`; `nlm-status` the existing notebook |
+| `ALREADY_SENT` | that `*_sent_at` guard is already set | no | do not send |
+| `BRIEF_NOT_SENT` | podcast link before the brief | no | send the brief first |
+| `BRIEF_SCHEMA_INVALID` | the brief fails `brief.schema.json` (`detail.errors`); nothing stored | no | re-prompt once with the errors, then `set-status partial` (see `brief-writer` above) |
+| `PREPLOG_INVALID` | the write would break the schema (`detail.errors`); nothing written | no | fix the field; for `--from-json`, drop unknown keys |
+| `PREPLOG_CORRUPT` | the file is not valid JSON / not version 1; never overwritten | no | say so in the run log; Chris repairs it |
+| `SCHEMA_MISSING` | `memory-templates/` not reachable from the skill | no | run `scripts/install-workspace.sh` |
+| `USAGE` | bad arguments (key shape, dates, enums, empty values) | no | fix the call |
+
+Guards this tool enforces, so the model does not have to: one `notebook_id` per session, one
+brief send and one podcast-link send per session, `attempts` capped at 3 (`needs-human`,
+`MAX_ATTEMPTS`, `notify_chris` once; only a `human`/`manual` `set-status pending --reset-attempts`
+starts over), a `plan` that never lists a recorded step, and an `upsert` that writes nothing when
+nothing changed. It does **not** count tool calls: the 25-per-session budget is the agent's rule.

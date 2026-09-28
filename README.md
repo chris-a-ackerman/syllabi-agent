@@ -7,10 +7,13 @@ Deploying means creating an agent from Maritime's OpenClaw template, cloning thi
 persistent volume, running two install scripts, and adding one Maritime wake trigger. The steps
 were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritime.md).
 
-> **Status: V0 scaffold + syllabi skill.** The instructions, schemas, trigger prompts and tool
-> contracts are in place. The `syllabi` skill is implemented (SYL-105, tested against a fake
-> endpoint, not yet run against the live app). `canvas` (SYL-93, PR #2), `nlm` (SYL-94, PR #3)
-> and `drive` (SYL-95, PR #4) are on their own branches.
+> **Status: V0 scaffold.** The instructions, schemas, trigger prompts and tool contracts are in
+> place. The skill scripts (`canvas`, `nlm`, `drive`) are stubs, to be filled in by V2–V4.
+> The `brief` skill (SYL-96) is implemented and tested: the brief-writer input bundle under the
+> 40k-token cap, the reply validation (schema + fuzzy ≥ 0.9 hallucination filter) and the
+> Telegram formatting; so is the standalone `pdf-text` helper it shares its extractor with.
+> The `preplog` memory skill (SYL-100, memory half) is implemented and tested: the prep-log state machine with
+> its never-redo guards, the run log and course-notes edits.
 
 ---
 
@@ -37,7 +40,16 @@ were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritim
 │   │   │   └── scripts/syllabi.py← the CLI over the app's agent-upcoming endpoint; `syllabi` is a symlink
 │   │   ├── canvas/SKILL.md       ← Canvas LMS reads (stub)
 │   │   ├── nlm/SKILL.md          ← nlm-prep / nlm-status for NotebookLM (stub)
-│   │   └── drive/SKILL.md        ← drive-put via rclone (stub)
+│   │   ├── drive/SKILL.md        ← drive-put via rclone (stub)
+│   │   ├── brief/                ← brief-writer pipeline: bundle, validate, format (SYL-96)
+│   │   │   ├── SKILL.md
+│   │   │   └── scripts/brief.py    (+ `brief` symlink)
+│   │   └── pdf-text/             ← PDF → text (pdftotext → pypdf → built-in), reuses brief.py's extractor
+│   │       ├── SKILL.md
+│   │       └── scripts/pdf_text.py (+ `pdf-text` symlink)
+│   │   └── preplog/              ← memory tool: prep-log state machine, run log, course notes (SYL-100, memory half)
+│   │       ├── SKILL.md
+│   │       └── scripts/preplog.py  (+ `preplog` symlink)
 │   └── memory-templates/
 │       ├── prep-log.schema.json  ← JSON Schema for /data/memory/prep-log.json
 │       ├── brief.schema.json     ← JSON Schema for brief-writer output
@@ -53,6 +65,10 @@ were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritim
 │   └── hw2-writeup.md            ← HW2 writeup skeleton (one heading per rubric item)
 ├── tests/
 │   └── test_syllabi.py           ← syllabi skill tests, no network: python3 -m unittest discover -s tests
+│   ├── test_brief.py             ← unit tests for the brief skill (no network): python3 -m unittest discover -s tests
+│   └── test_pdf_text.py          ← unit tests for the pdf-text helper
+│   └── test_preplog.py           ← unit tests for the preplog skill (no network): python3 -m unittest discover -s tests
+│   └── test_canvas.py            ← canvas skill tests, no network: python3 -m unittest discover -s tests
 └── evidence/
     ├── eval/cases.md             ← the 5 eval cases, baseline vs improved (results blank)
     └── failures/                 ← screenshots/logs of failures and recoveries
@@ -118,9 +134,6 @@ Timing: **24 hours before class** if something is due beforehand, **morning-of**
 
 Full contracts in [`docs/tool-contract.md`](docs/tool-contract.md).
 
-- **`canvas` skill** (or `vishalsachdev/canvas-mcp` as an MCP server if the template supports it):
-  `list_modules`, `list_files`, `download_file` → `/data/readings/`, `upcoming_assignments`,
-  `get_page`. Reports 401 and 403 as separate errors.
 - **`syllabi` skill** (`workspace/skills/syllabi/scripts/syllabi.py`): `upcoming --days 3
   --within-hours 48` calls the syllabi app's `agent-upcoming` edge function with a scoped,
   revocable agent token (minted in the app's Settings → Agent access) and returns one record per
@@ -128,6 +141,12 @@ Full contracts in [`docs/tool-contract.md`](docs/tool-contract.md).
   `due_before_class`, and the `notify_at` the agent must store, all in ET. `course <code>` gives
   one course's schedule and policies; `check` is the auth smoke test. Auth failure is
   `SYLLABI_401`. The app does not send reading links yet, so readings come from Canvas.
+- **`canvas` skill** (`workspace/skills/canvas/scripts/canvas.py`, plain REST, GET only):
+  `modules`, `files`, `download` → `/data/readings/`, `assignments`, `page`, `whoami`.
+  Reports 401 and 403 as separate errors. Sanitizes file names, never forwards the token across
+  the pre-signed download redirect, refuses redirects to non-https or private addresses.
+- **syllabi endpoint:** `GET /agent/upcoming?days=3` (sessions, topics, reading links, anything
+  due, `canvas_course_id`), `GET /agent/course/:id`. Bearer agent token.
 - **`nlm-prep <course> <date> <pdf...>`** creates a notebook, adds sources, *starts* the audio
   overview, and returns `{notebook_id}` immediately.
   **`nlm-status <notebook_id>`** returns `{status: pending|ready|failed, audio_url?}`. When the
@@ -149,6 +168,13 @@ Full contracts in [`docs/tool-contract.md`](docs/tool-contract.md).
 - **`/data/memory/course-notes.md`** (template: [`workspace/memory-templates/course-notes.md`](workspace/memory-templates/course-notes.md)):
   per-course learned quirks (where readings actually live, which links need login, where pre-class
   questions are posted). Read before planning, written after each run.
+- **`preplog` skill** ([`workspace/skills/preplog/SKILL.md`](workspace/skills/preplog/SKILL.md)): every
+  read and write of both files, and of the run log, goes through it rather than through hand-edited
+  JSON. It validates each write against the schema, writes atomically under a lock, computes
+  `notify_at`, lists the prep steps a session still needs (`plan`), refuses a second `notebook_id`
+  and a second send (`ALREADY_HAS_NOTEBOOK`, `ALREADY_SENT`), turns the third attempt into
+  `needs-human`, selects the send pass (`due`) and appends the run-log block (`runlog`).
+  Tests: `python3 -m unittest discover -s tests` ([`tests/test_preplog.py`](tests/test_preplog.py)).
 
 ### Agent loop (rubric 3): three phases on OpenClaw cron jobs (America/New_York)
 
@@ -183,6 +209,17 @@ The main agent validates it against [`brief.schema.json`](workspace/memory-templ
 Every `pre_class_questions[].question` must appear (fuzzy ≥ 0.9) in the Canvas text; otherwise
 it is dropped and logged as a hallucination. On schema failure the main agent re-prompts once,
 then marks the session partial. The main agent formats the Telegram message, not the subagent.
+
+The mechanics live in the **`brief` skill** ([`workspace/skills/brief/SKILL.md`](workspace/skills/brief/SKILL.md)):
+`brief bundle` builds the task text under the cap (Canvas text whole, readings split evenly, each
+cut reading ending in `[TRUNCATED: kept first N of M characters]`) and records the Canvas text it
+used; `brief validate` extracts the JSON, checks the schema, scores every question against that
+recorded Canvas text with `difflib` (whole sentences/lines only, at least 4 words, numbers,
+negations and content words must match exactly) and drops the ones under 0.9 as `HALLUCINATION:` lines, and
+hands back the re-prompt text on the first schema failure; `brief format` renders the Telegram
+brief (drafts marked as drafts, Drive links, podcast link or "podcast pending") within Telegram's
+4096-character limit. Tests: `python3 -m unittest discover -s tests`
+([`tests/test_brief.py`](tests/test_brief.py)).
 
 ### Failure recovery (rubric 5)
 
@@ -227,5 +264,5 @@ deploy. The full runbook is in [`docs/deploy-maritime.md`](docs/deploy-maritime.
 | new | Config persistence | `openclaw config patch` changes survive `maritime restart`; Maritime does not regenerate `openclaw.json`. |
 | new | Filesystem persistence | On restart Maritime logs "Captured derived image … Edits will survive restart", so installs outside `/data` should persist too. Confirm with the first V2 install. |
 
-Still to check before V2: whether `python3`, `pip`, `notebooklm-py` and `rclone` are available, and
-that an install survives a restart.
+Still to check: whether `python3` (all the canvas skill needs), `pip`, `notebooklm-py` and `rclone`
+are available, and that an install survives a restart.
