@@ -98,7 +98,12 @@ Expected: `[]`. To undo: `cp /data/openclaw.json.pre-subagent ~/.openclaw/opencl
 ## 7. Still to do
 
 - Check the V2–V4 tooling: `python3`, `pip`, `notebooklm-py`, `rclone`, and whether installs
-  survive a restart.
+  survive a restart. The canvas skill (SYL-93) needs only `python3` (standard library). Check it
+  with, in the agent chat:
+  ```
+  Run: python3 /data/syllabi-agent/workspace/skills/canvas/scripts/canvas.py whoami
+  Run: python3 /data/syllabi-agent/workspace/skills/canvas/scripts/canvas.py modules 40577
+  ```
 - Upload secrets to `/data/secrets/` and `/data/rclone/`, and set the environment variables with
   `maritime env set` (see `.env.example`).
 - Smoke-test the brief skill (agent chat):
@@ -108,6 +113,15 @@ Expected: `[]`. To undo: `cp /data/openclaw.json.pre-subagent ~/.openclaw/opencl
   has (the built-in fallback handles text PDFs, not scans). Then ask the agent *"How do you check
   the brief-writer's reply before you store it?"* (expect `brief validate`, the schema and the
   ≥ 0.9 fuzzy check).
+- Smoke-test the memory tool (agent chat):
+  `Run: python3 /data/syllabi-agent/workspace/skills/preplog/scripts/preplog.py init` then
+  `Run: python3 /data/syllabi-agent/workspace/skills/preplog/scripts/preplog.py validate`.
+  Expect `created_prep_log: false` when `install-workspace.sh` already seeded the file, and
+  `sessions: 0`. Then ask the agent *"How do you record that a podcast was started, and what stops
+  you from starting a second one?"* (expect `preplog set-notebook` and `ALREADY_HAS_NOTEBOOK`).
+- The job prompts in `triggers/*.md` now name the `preplog` commands. After pulling that change,
+  re-install the jobs so OpenClaw picks up the new text:
+  `Run: cd /data/syllabi-agent && git pull && sh scripts/install-jobs.sh --replace`.
 
 ---
 
