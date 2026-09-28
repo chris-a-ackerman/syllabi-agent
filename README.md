@@ -7,8 +7,10 @@ Deploying means creating an agent from Maritime's OpenClaw template, cloning thi
 persistent volume, running two install scripts, and adding one Maritime wake trigger. The steps
 were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritime.md).
 
-> **Status: V0 scaffold.** The instructions, schemas, trigger prompts and tool contracts are in
-> place. The skill scripts (`canvas`, `nlm`, `drive`) are stubs, to be filled in by V2–V4.
+> **Status: V0 scaffold + V3 nlm skill.** The instructions, schemas, trigger prompts and tool
+> contracts are in place. The `nlm` skill is implemented (SYL-94, tested against a fake
+> notebooklm-py client, not yet run against NotebookLM). `canvas` (SYL-93, PR #2) and `drive`
+> (V4) land in their own tickets.
 
 ---
 
@@ -31,7 +33,9 @@ were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritim
 │   │   └── brief-writer.md       ← subagent definition: role, bounded context, output contract
 │   ├── skills/
 │   │   ├── canvas/SKILL.md       ← Canvas LMS reads (stub)
-│   │   ├── nlm/SKILL.md          ← nlm-prep / nlm-status for NotebookLM (stub)
+│   │   ├── nlm/
+│   │   │   ├── SKILL.md          ← NotebookLM podcasts: prep / status / check, errors, agent rules
+│   │   │   └── scripts/nlm.py    ← the CLI over notebooklm-py; nlm-prep and nlm-status are symlinks to it
 │   │   └── drive/SKILL.md        ← drive-put via rclone (stub)
 │   └── memory-templates/
 │       ├── prep-log.schema.json  ← JSON Schema for /data/memory/prep-log.json
@@ -46,6 +50,8 @@ were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritim
 │   ├── deploy-maritime.md        ← verified deploy runbook + what we learned about Maritime
 │   ├── tool-contract.md          ← every tool: name, inputs, outputs, error shape
 │   └── hw2-writeup.md            ← HW2 writeup skeleton (one heading per rubric item)
+├── tests/
+│   └── test_nlm.py               ← nlm skill tests, no network: python3 -m unittest discover -s tests
 └── evidence/
     ├── eval/cases.md             ← the 5 eval cases, baseline vs improved (results blank)
     └── failures/                 ← screenshots/logs of failures and recoveries
@@ -116,11 +122,15 @@ Full contracts in [`docs/tool-contract.md`](docs/tool-contract.md).
   `get_page`. Reports 401 and 403 as separate errors.
 - **syllabi endpoint:** `GET /agent/upcoming?days=3` (sessions, topics, reading links, anything
   due, `canvas_course_id`), `GET /agent/course/:id`. Bearer agent token.
-- **`nlm-prep <course> <date> <pdf...>`** creates a notebook, adds sources, *starts* the audio
-  overview, and returns `{notebook_id}` immediately.
-  **`nlm-status <notebook_id>`** returns `{status: pending|ready|failed, audio_url?}`. When the
-  audio is ready, it downloads the mp3 to `/data/podcasts/` and pushes it to Drive.
-  Cookies are at `/data/secrets/notebooklm-cookies.json`. Auth failure returns error code `NLM_AUTH`.
+- **`nlm-prep <course> <date> <pdf...>`** (`workspace/skills/nlm/scripts/nlm.py prep`) finds or
+  creates the notebook `"<course> — <date>"`, adds the PDFs as sources, *starts* the audio
+  overview, and returns `{notebook_id, audio: started|already-started|deferred}` at once. It
+  refuses to start a second podcast when the prep-log already has a `notebook_id`.
+  **`nlm-status <notebook_id> --course C --date D`** returns `{status: pending|ready|failed}`.
+  When the audio is ready, it has downloaded it to `/data/podcasts/<course>/<date>.m4a` and run
+  `drive-put`, returning `drive_link`. `nlm.py check` is the auth smoke test.
+  Cookies (a `notebooklm login` storage_state.json) are at `/data/secrets/notebooklm-cookies.json`;
+  their values are scrubbed from every output line. Auth failure returns error code `NLM_AUTH`.
 - **`drive-put <local_path> <remote_dir>`** returns a share link, via rclone. Config is at
   `/data/rclone/rclone.conf`. Idempotent.
 - **Telegram** (Maritime channel) for briefs and questions, sent with `maritime-telegram-send`.
@@ -215,5 +225,6 @@ deploy. The full runbook is in [`docs/deploy-maritime.md`](docs/deploy-maritime.
 | new | Config persistence | `openclaw config patch` changes survive `maritime restart`; Maritime does not regenerate `openclaw.json`. |
 | new | Filesystem persistence | On restart Maritime logs "Captured derived image … Edits will survive restart", so installs outside `/data` should persist too. Confirm with the first V2 install. |
 
-Still to check before V2: whether `python3`, `pip`, `notebooklm-py` and `rclone` are available, and
-that an install survives a restart.
+Still to check: whether `python3` is 3.10+ and `pip install notebooklm-py` works on Maritime (the
+nlm skill needs both; `nlm.py check` tells you), whether `rclone` is available, and that an
+install survives a restart.

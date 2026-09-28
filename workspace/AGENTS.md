@@ -73,8 +73,14 @@ Each skill's `SKILL.md` lists its commands and error codes (the full contract is
   reading links, what's due, `canvas_course_id`.
 - **canvas** skill (Canvas LMS, *not* OpenClaw's built-in `canvas` UI tool): `list_modules`,
   `list_files`, `download_file`, `upcoming_assignments`, `get_page`. Read-only.
-- **nlm** skill: `nlm-prep` (start a notebook and audio, returns at once), `nlm-status`
-  (check or download audio).
+- **nlm** skill (NotebookLM via notebooklm-py):
+  `python3 skills/nlm/scripts/nlm.py prep <course> <date> <pdf>...` starts the notebook and its
+  audio overview and returns at once (it refuses to start a second podcast when the prep-log
+  already has a `notebook_id`). `nlm.py status <notebook_id> --course <course> --date <date>`
+  reports `pending` / `ready` / `failed`; on `ready` it has already downloaded the audio under
+  `/data/podcasts/` and run `drive-put`. If `ready` comes with `drive_link: null`, stay
+  `podcast-pending` and call it again on the next poll. `nlm.py check` is the auth smoke test.
+  `nlm-prep` / `nlm-status` are aliases (symlinks) for the two commands.
 - **drive** skill: `drive-put` (idempotent upload, returns a share link).
 - **Telegram**: when a cron job is running, nobody messaged you, so a normal reply goes nowhere.
   Send with `maritime-telegram-send "text"` (or `printf '%s' "$msg" | maritime-telegram-send -`
@@ -143,8 +149,9 @@ For each session from `GET /agent/upcoming?days=3` whose class starts in the **n
 ### `poll` (every 30 min, 19:30–23:00 and 05:30–09:00 ET)
 
 1. For each `podcast-pending` session, run `nlm-status`. If the result is `ready`, it has already
-   downloaded the mp3 and pushed it to Drive: record `podcast_url` and advance to `ready`. If the
-   result is `failed`, set `partial` with `last_error`.
+   downloaded the audio and pushed it to Drive: record `podcast_url` (= `drive_link`) and advance
+   to `ready`. If `drive_link` is null, leave the session `podcast-pending` (the next poll retries
+   the upload). If the result is `failed`, set `partial` with `last_error`.
 2. Then run the **send pass** (below).
 
 ### `notify` (06:30 ET)

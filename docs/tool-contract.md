@@ -105,31 +105,55 @@ No write ops exist, by design.
 
 ## 3. `nlm` skill (NotebookLM via `notebooklm-py`)
 
-Cookies: `$NLM_COOKIES_PATH` = `/data/secrets/notebooklm-cookies.json`.
+Implemented as `workspace/skills/nlm/scripts/nlm.py` (SYL-94; `scripts/nlm-prep` and
+`scripts/nlm-status` are symlinks to it that imply the subcommand), a standard-library Python
+wrapper over `notebooklm-py`'s async client (`NotebookLMClient.from_storage(path=$NLM_COOKIES_PATH)`,
+imported lazily). Cookies: `$NLM_COOKIES_PATH` = `/data/secrets/notebooklm-cookies.json`, a
+Playwright `storage_state.json` from `notebooklm login`. Every command finishes within 50 s or
+returns `NLM_UNAVAILABLE` (`retryable: true`).
 
-### `nlm-prep <course> <date> <pdf...>`
-
-| | |
-| --- | --- |
-| Inputs | `course` (e.g. `MAS.665`), `date` (`YYYY-MM-DD`), one or more PDF paths under `/data/readings/` |
-| Behavior | create notebook `"<course> — <date>"`, add sources, **start** audio overview, return immediately |
-| Output | `{ok: true, notebook_id, sources_added, audio: "started"}` |
-| Precondition | the agent must not call it if the prep-log record has a `notebook_id` |
-
-### `nlm-status <notebook_id> [--course C --date D]`
+### `nlm-prep <course> <date> <pdf...>` (= `nlm.py prep`)
 
 | | |
 | --- | --- |
-| Output | `{ok: true, status: "pending"}` · `{ok: true, status: "ready", audio_url, local_path, drive_link}` · `{ok: true, status: "failed", reason}` |
-| Side effect on `ready` | downloads the mp3 to `/data/podcasts/<course>/<date>.mp3` and pushes it to Drive (`drive-put` logic). Idempotent |
+| Inputs | `course` (e.g. `MAS.665`), `date` (`YYYY-MM-DD`), one or more files under `$DATA_DIR/readings/` |
+| Behavior | find or create notebook `"<course> — <date>"`, add each file as a source (skip ones already there by name), wait ≤ `$NLM_SOURCE_WAIT` s (default 20) for processing, **start** the audio overview, return |
+| Output | `{ok: true, notebook_id, notebook_title, created, sources_added, sources_reused, sources_rejected: [{path, code, message}], audio: "started" \| "already-started" \| "deferred", task_id?, artifact_id?, sources_pending?}` |
+| Guard | if `$DATA_DIR/memory/prep-log.json` already has a `notebook_id` for `<course>@<date>`, returns it with `audio: "already-started", skipped: true` and touches nothing. If the notebook already has a podcast that isn't failed, `audio: "already-started"` |
+| `deferred` | sources were still processing at the deadline; `nlm-status` starts the audio on a later poll. The agent treats all three `audio` values the same: record `notebook_id`, set `podcast-pending` |
+
+### `nlm-status <notebook_id> [--course C --date D]` (= `nlm.py status`)
+
+| | |
+| --- | --- |
+| Inputs | `notebook_id`; `--course`/`--date` together, else read from the notebook title |
+| Output | `{ok: true, status: "pending", artifact_status?, audio?: "started" \| "waiting-for-sources"}` · `{ok: true, status: "ready", audio_url, local_path, drive_link, remote_path?, drive_error?, downloaded, bytes}` · `{ok: true, status: "failed", reason}` (plus `notebook_id, course, date, artifact_id?` on all) |
+| Side effect on `ready` | downloads the audio to `/data/podcasts/<course>/<date>.<m4a\|mp3>` (extension from the real container; written as `.part` then renamed) and runs `drive-put <local_path> <course>/<date>`. Idempotent: an existing file is not re-downloaded; `drive-put` is re-run for the link |
+| No audio yet | starts it if every source is ready (`pending`, `audio: "started"`); `pending`, `audio: "waiting-for-sources"` if some are processing; `failed` if there are no usable sources |
+| `drive_link: null` | the upload failed (`drive_error: {code, message, retryable}`, incl. `DRIVE_NOT_INSTALLED` until V4 lands): stay `podcast-pending` and call again next poll |
+| `failed` | final: `status` never restarts a failed podcast |
+
+### `nlm.py check`
+
+`{ok: true, notebooks, cookies_path}`: auth smoke test (lists notebooks).
+
+Security rules the implementation enforces (SYL-94): source paths must resolve under
+`$DATA_DIR/readings/` (realpath, so symlinks can't escape); `course`, `date` and `notebook_id` are
+validated before they become path components; every value from the cookie file is redacted from
+stdout and stderr (including crash output and library logging); the library's own state is kept
+under `$DATA_DIR/secrets/notebooklm/`; `-v` logs `<op> <id>` only.
 
 | code | when | retryable | agent action |
 | --- | --- | --- | --- |
-| `NLM_AUTH` | cookies expired/invalid | yes (**once**) | after the retry fails: `partial`, ask for fresh cookies (condition 3); brief and Drive links still go out on schedule; the next prep run does only the podcast step |
+| `NLM_AUTH` | cookie file missing (`retryable: false`), or NotebookLM rejected the cookies | yes (**once**) | after the retry fails: `partial`, ask for fresh cookies (condition 3); brief and Drive links still go out on schedule; the next prep run does only the podcast step |
 | `NLM_NOT_FOUND` | notebook id unknown | no | ask Chris before clearing `notebook_id` |
-| `NLM_SOURCE_REJECTED` | a source couldn't be added | no | continue with the rest; note it in the brief |
-| `NLM_RATE_LIMIT` | quota / throttled | yes (next poll) | stay `podcast-pending` |
-| `NLM_UNAVAILABLE` | network / unexpected response | yes (once) | then `partial` |
+| `NLM_SOURCE_REJECTED` | every source was refused or failed to process (a partial rejection is reported in `sources_rejected` with `ok: true`) | no | `partial` for the podcast; note it in the brief |
+| `NLM_RATE_LIMIT` | quota / throttled / notebook limit | yes (next poll) | stay `podcast-pending` |
+| `NLM_UNAVAILABLE` | network / timeout / 5xx (`retryable: true`); unexpected response or library error (`retryable: false`) | see `retryable` | retry once if retryable, then `partial` |
+| `NLM_NOT_INSTALLED` | `notebooklm-py` not importable by `python3` | no | tell Chris |
+| `USAGE` | bad arguments: file outside `$DATA_DIR/readings/`, bad course/date, `--course` without `--date` | no | a bug in the call |
+
+Tests (no network, fake client): `python3 -m unittest discover -s tests`.
 
 ---
 

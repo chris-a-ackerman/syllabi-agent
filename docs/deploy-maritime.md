@@ -98,9 +98,22 @@ Expected: `[]`. To undo: `cp /data/openclaw.json.pre-subagent ~/.openclaw/opencl
 ## 7. Still to do
 
 - Check the V2–V4 tooling: `python3`, `pip`, `notebooklm-py`, `rclone`, and whether installs
-  survive a restart.
+  survive a restart. The nlm skill (SYL-94) needs Python 3.10+ and `notebooklm-py` in the same
+  `python3`. In the agent chat:
+  ```
+  Run: python3 --version && python3 -m pip install --user notebooklm-py
+  Run: python3 /data/syllabi-agent/workspace/skills/nlm/scripts/nlm.py check
+  ```
+  `check` must print `{"ok": true, "notebooks": N, ...}`. `NLM_AUTH` means the cookie file is
+  missing or stale; `NLM_NOT_INSTALLED` means the pip install did not land in that `python3`.
+  Then one real session: `nlm.py prep MAS.665 <date> /data/readings/MAS.665/<date>/<file>.pdf`,
+  and a few minutes later `nlm.py status <notebook_id> --course MAS.665 --date <date>` until it
+  says `ready` (with `drive_link: null` and `DRIVE_NOT_INSTALLED` until the drive skill lands).
+  Restart the agent afterwards and re-run `check` to confirm the install survived.
 - Upload secrets to `/data/secrets/` and `/data/rclone/`, and set the environment variables with
-  `maritime env set` (see `.env.example`).
+  `maritime env set` (see `.env.example`). NotebookLM needs the `notebooklm login`
+  `storage_state.json` at `/data/secrets/notebooklm-cookies.json`, made on the laptop with
+  `pipx install "notebooklm-py[browser]"` and `notebooklm login`.
 
 ---
 
