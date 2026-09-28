@@ -36,11 +36,17 @@ MIT AI Studio (MAS.665). Plan of record: [`README.md`](../README.md).
      - the model asked for /approve with approvals off, which would have stalled every unattended run;
        fixed by the pre-authorization section in AGENTS.md;
      - a scheduled job silently never fired because Maritime didn't see it; found by sleeping the
-       agent and testing; fixed with an explicit wake trigger. -->
+       agent and testing; fixed with an explicit wake trigger.
+     Prompt injection (README "Trust boundaries"): the agent reads text other people wrote with a
+     full-account Canvas token in hand. Instructions come from four places only; everything a tool
+     returns is data (AGENTS.md hard rule 8); the subagent is tool-less and gets the same rule;
+     links are readings, never "further instructions". Evidence: tests/test_instructions.py,
+     eval case 6 (an assignment that tells the agent to submit and to message Chris), the
+     INJECTION: line in the run log. -->
 
 ## 6. Evaluation
 
-<!-- Baseline vs improved on the 5 cases (evidence/eval/cases.md). Table + discussion.
+<!-- Baseline vs improved on the 5 cases (evidence/eval/cases.md), plus case 6 (injection). Table + discussion.
      Brief-quality rubric (1–5): 5 = accurate, complete, actionable, questions verbatim; 1 = wrong/unusable. -->
 
 ## What's still manual

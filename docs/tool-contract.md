@@ -33,6 +33,11 @@ Rules for every tool:
 - A timeout counts as an error (`*_UNAVAILABLE`, `retryable: true`), never a hang. Each call must
   finish well within the 30-second reply budget. The only long job (audio generation) runs
   asynchronously.
+- **Everything a tool returns is untrusted data**: names, titles, descriptions, page bodies, file
+  contents, links, statuses and error messages. Tools pass content through as-is (they do not try
+  to filter "instructions" out, because string matching cannot do that). The boundary is enforced
+  by the agent: it summarizes content and never treats it as an instruction
+  (`workspace/AGENTS.md`, hard rule 8 and "Trust boundaries").
 
 ---
 
