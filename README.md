@@ -7,9 +7,10 @@ Deploying means creating an agent from Maritime's OpenClaw template, cloning thi
 persistent volume, running two install scripts, and adding one Maritime wake trigger. The steps
 were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritime.md).
 
-> **Status: V0 scaffold + V2 canvas skill.** The instructions, schemas, trigger prompts and tool
-> contracts are in place. The `canvas` skill is implemented (SYL-93, tested against a fake HTTP
-> transport, not yet run against canvas.mit.edu). `nlm` and `drive` are stubs for V3–V4.
+> **Status: V0 scaffold.** The instructions, schemas, trigger prompts and tool contracts are in
+> place. The skill scripts (`canvas`, `nlm`, `drive`) are stubs, to be filled in by V2–V4.
+> The `preplog` memory skill (SYL-100, memory half) is implemented and tested: the prep-log state machine with
+> its never-redo guards, the run log and course-notes edits.
 
 ---
 
@@ -35,7 +36,10 @@ were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritim
 │   │   │   ├── SKILL.md          ← Canvas LMS reads: commands, errors, reading discovery rule
 │   │   │   └── scripts/canvas.py ← the CLI (stdlib Python, GET only); scripts/canvas is a symlink to it
 │   │   ├── nlm/SKILL.md          ← nlm-prep / nlm-status for NotebookLM (stub)
-│   │   └── drive/SKILL.md        ← drive-put via rclone (stub)
+│   │   ├── drive/SKILL.md        ← drive-put via rclone (stub)
+│   │   └── preplog/              ← memory tool: prep-log state machine, run log, course notes (SYL-100, memory half)
+│   │       ├── SKILL.md
+│   │       └── scripts/preplog.py  (+ `preplog` symlink)
 │   └── memory-templates/
 │       ├── prep-log.schema.json  ← JSON Schema for /data/memory/prep-log.json
 │       ├── brief.schema.json     ← JSON Schema for brief-writer output
@@ -50,6 +54,7 @@ were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritim
 │   ├── tool-contract.md          ← every tool: name, inputs, outputs, error shape
 │   └── hw2-writeup.md            ← HW2 writeup skeleton (one heading per rubric item)
 ├── tests/
+│   └── test_preplog.py           ← unit tests for the preplog skill (no network): python3 -m unittest discover -s tests
 │   └── test_canvas.py            ← canvas skill tests, no network: python3 -m unittest discover -s tests
 └── evidence/
     ├── eval/cases.md             ← the 5 eval cases, baseline vs improved (results blank)
@@ -143,6 +148,13 @@ Full contracts in [`docs/tool-contract.md`](docs/tool-contract.md).
 - **`/data/memory/course-notes.md`** (template: [`workspace/memory-templates/course-notes.md`](workspace/memory-templates/course-notes.md)):
   per-course learned quirks (where readings actually live, which links need login, where pre-class
   questions are posted). Read before planning, written after each run.
+- **`preplog` skill** ([`workspace/skills/preplog/SKILL.md`](workspace/skills/preplog/SKILL.md)): every
+  read and write of both files, and of the run log, goes through it rather than through hand-edited
+  JSON. It validates each write against the schema, writes atomically under a lock, computes
+  `notify_at`, lists the prep steps a session still needs (`plan`), refuses a second `notebook_id`
+  and a second send (`ALREADY_HAS_NOTEBOOK`, `ALREADY_SENT`), turns the third attempt into
+  `needs-human`, selects the send pass (`due`) and appends the run-log block (`runlog`).
+  Tests: `python3 -m unittest discover -s tests` ([`tests/test_preplog.py`](tests/test_preplog.py)).
 
 ### Agent loop (rubric 3): three phases on OpenClaw cron jobs (America/New_York)
 
