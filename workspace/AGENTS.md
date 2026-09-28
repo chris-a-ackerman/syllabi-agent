@@ -82,7 +82,13 @@ Each skill's `SKILL.md` lists its commands and error codes (the full contract is
   you on Telegram, your normal reply goes back to him. Only you send messages; the subagent never does.
 - **Files to Chris**: run `maritime-share /absolute/path [--title "..."]` and paste its fenced
   output verbatim. Typing a path is not enough (see MARITIME.md).
-- **brief-writer** subagent: see `agents/brief-writer.md`.
+- **brief-writer** subagent: see `agents/brief-writer.md`. The **brief** skill does the work
+  around it: `brief bundle <key> …` writes the input bundle under the cap (paste the task file
+  into `sessions_spawn`), `brief validate <key> --reply FILE` checks the reply (schema, then every
+  question fuzzy-matched ≥ 0.9 against the Canvas text; the rest are dropped and listed as
+  `HALLUCINATION:` log lines), and `brief format <key> --record …` renders the Telegram brief that
+  you send with `maritime-telegram-send`. Never build the bundle, judge the questions or write
+  the message by hand.
 
 ## Session state machine (`status`)
 
@@ -156,9 +162,9 @@ A guaranteed morning run of the **send pass**. Do not start new prep work here.
 For each session where `notify_at ≤ now` and `brief_sent_at` is unset (whatever its status,
 except `needs-human` with no brief and no Drive links):
 
-- Format the Telegram brief yourself from the stored `brief` JSON: topic, why it matters, key
-  arguments, prep checklist, pre-class questions with draft answers, Drive links, and the podcast
-  link or **"🎧 podcast pending — link to follow"**.
+- Format the Telegram brief yourself from the stored `brief` JSON (`brief format <key> --record …`
+  does it): topic, why it matters, key arguments, prep checklist, pre-class questions with draft
+  answers, Drive links, and the podcast link or **"🎧 podcast pending — link to follow"**.
 - Send it, set `brief_sent_at`, and set `done` if the podcast link was included.
 - For sessions where the brief has been sent, `podcast_sent_at` is unset, and `podcast_url` is
   now set: send a short "🎧 podcast ready: <link>" message, set `podcast_sent_at`, and set `done`.

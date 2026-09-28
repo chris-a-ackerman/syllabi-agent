@@ -199,6 +199,38 @@ Validation errors (raised by the main agent):
 | `BRIEF_SCHEMA_INVALID` | failed schema validation twice (original + one re-prompt) | `partial`; send Drive links + podcast without a brief |
 | `BRIEF_HALLUCINATED_QUESTION` | a question's fuzzy match to the Canvas text is < 0.9 | drop that question, log `HALLUCINATION: …` (not a session failure) |
 
+### `brief` skill (the pipeline around the subagent)
+
+Implemented as `{baseDir}/scripts/brief <command> …` (`workspace/skills/brief/SKILL.md` has the
+full command table and a worked prep run). It builds the bundle, checks the reply and formats the
+Telegram text; the main agent still spawns the subagent itself. Work files live under
+`/data/work/<course>/<date>/`. `<key>` is `<course>@<YYYY-MM-DD>`.
+
+| Command | Inputs | Output (`ok: true` plus) |
+| --- | --- | --- |
+| `bundle <key>` | `--session FILE\|-` (row or `syllabi upcoming` output), `--canvas FILE`* (`canvas assignments`/`page` JSON, `{title,url,text}`, or text; `--assignment-id ID`* filters), `--readings-json FILE` (record / `preplog get` output / list) or `--reading PATH`*, `--notes FILE\|-`, `--cap-chars N`, `--print` | `task_path` (`brief-input.md`: prompt head from `agents/brief-writer.md` + `## SESSION`, `## CANVAS TEXT` (`### CANVAS: <title> (<url>)`), `## READINGS` (`### READING: <title>`, cut ones end `[TRUNCATED: kept first N of M characters]`), `## COURSE NOTES`), `sidecar_path` (`brief-input.json`), `task_name`, `chars, est_tokens, cap_chars, canvas[], readings[], skipped[], truncated[], warnings[]` |
+| `validate <key>` | `--reply FILE\|-`, `--attempt N`, `--threshold R`, `--canvas FILE`* (override) | `attempt, brief_path` (`brief-output.json`, the cleaned brief), `reply_path`, `questions {returned, kept, dropped}`, `kept[] {question, score, source, source_ok}`, `dropped[] {question, score, best_match, log_line}`, `log_lines[]`, `warnings[]` |
+| `format <key>` | `--record FILE\|-`, `--brief FILE`, `--drive-link URL`*, `--podcast-url URL`, `--no-podcast`, `--dropped N` | `text, parts[], paths[]` (`brief-telegram.txt`, `.2.txt`…), `send_with[]`, `has_brief, brief_source, questions, drive_links[], podcast: ready\|pending\|unavailable, includes_podcast, dropped` |
+| `format-podcast <key>` | `--url URL`, `--record FILE\|-` | `text` ("🎧 podcast ready: <link>" + course and class time), `path` |
+| `prompt` | | `prompt, source` (the blockquote under "## Prompt" in `agents/brief-writer.md`) |
+| `score` | `--question TEXT`, `--canvas FILE`*, `--threshold R` | `score, best_match, kept` |
+
+Rules the tool enforces: the bundle never exceeds the cap (`BRIEF_CAP_CHARS`, default 160000
+characters ≈ 40k tokens); Canvas text is kept whole and readings share the rest evenly; the
+Canvas text used by `validate` is the sidecar's copy, never text parsed back out of the bundle (a
+reading with a fake `### CANVAS:` header is indented, not promoted); inputs may not come from
+`/data/secrets/` or `/data/rclone/`, readings only from `/data/readings/` or `/data/work/`; the
+cleaned brief holds only the schema's fields and only the questions that scored ≥ the threshold.
+
+| code | when | retryable | agent action |
+| --- | --- | --- | --- |
+| `BRIEF_SCHEMA_INVALID` | no JSON object in the reply, or it fails the schema (`detail.errors`, `detail.attempt`, `detail.reprompt`, `detail.next`); nothing stored | no | attempt 1: spawn again with `detail.reprompt` appended; attempt 2: `partial` (§6 above) |
+| `NO_BUNDLE` | `validate` without a prior `bundle` for the key and no `--canvas` | no | run `bundle` |
+| `PROMPT_MISSING` / `SCHEMA_MISSING` | `agents/brief-writer.md` / `memory-templates/brief.schema.json` not reachable | no | run `scripts/install-workspace.sh` |
+| `USAGE` | bad key, forbidden path, unknown Canvas JSON shape, session file without this key | no | fix the call |
+
+A dropped question is reported in `dropped[]` / `log_lines[]` and is not an error.
+
 ---
 
 ## 7. Agent-level codes (in `last_error`, not emitted by tools)

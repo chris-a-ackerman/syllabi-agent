@@ -26,7 +26,12 @@ MIT AI Studio (MAS.665). Plan of record: [`README.md`](../README.md).
 ## 4. Subagent
 
 <!-- brief-writer: bounded context (~40k tokens), no tools, strict JSON, schema validation,
-     the fuzzy ≥ 0.9 check against Canvas text, re-prompt once then partial. Hallucination log examples. -->
+     the fuzzy ≥ 0.9 check against Canvas text, re-prompt once then partial. Hallucination log examples.
+     Implementation: workspace/skills/brief (SYL-103): `bundle` (cap, even split, truncation notes,
+     sidecar with the Canvas text), `validate` (JSON extraction, schema subset, difflib ratio vs Canvas
+     sentences/windows, HALLUCINATION lines, reprompt on attempt 1 / partial on attempt 2), `format`
+     (Telegram text, drafts marked). Evidence: tests/test_brief.py (the forged "### CANVAS:" header
+     test is the injection case), plus a real brief-validation.json with a dropped question. -->
 
 ## 5. Failure recovery
 

@@ -9,6 +9,9 @@ were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritim
 
 > **Status: V0 scaffold.** The instructions, schemas, trigger prompts and tool contracts are in
 > place. The skill scripts (`canvas`, `nlm`, `drive`) are stubs, to be filled in by V2–V4.
+> The `brief` skill (SYL-103) is implemented and tested: the brief-writer input bundle under the
+> 40k-token cap, the reply validation (schema + fuzzy ≥ 0.9 hallucination filter) and the
+> Telegram formatting.
 
 ---
 
@@ -32,7 +35,10 @@ were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritim
 │   ├── skills/
 │   │   ├── canvas/SKILL.md       ← Canvas LMS reads (stub)
 │   │   ├── nlm/SKILL.md          ← nlm-prep / nlm-status for NotebookLM (stub)
-│   │   └── drive/SKILL.md        ← drive-put via rclone (stub)
+│   │   ├── drive/SKILL.md        ← drive-put via rclone (stub)
+│   │   └── brief/                ← brief-writer pipeline: bundle, validate, format (SYL-103)
+│   │       ├── SKILL.md
+│   │       └── scripts/brief.py    (+ `brief` symlink)
 │   └── memory-templates/
 │       ├── prep-log.schema.json  ← JSON Schema for /data/memory/prep-log.json
 │       ├── brief.schema.json     ← JSON Schema for brief-writer output
@@ -46,6 +52,8 @@ were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritim
 │   ├── deploy-maritime.md        ← verified deploy runbook + what we learned about Maritime
 │   ├── tool-contract.md          ← every tool: name, inputs, outputs, error shape
 │   └── hw2-writeup.md            ← HW2 writeup skeleton (one heading per rubric item)
+├── tests/
+│   └── test_brief.py             ← unit tests for the brief skill (no network): python3 -m unittest discover -s tests
 └── evidence/
     ├── eval/cases.md             ← the 5 eval cases, baseline vs improved (results blank)
     └── failures/                 ← screenshots/logs of failures and recoveries
@@ -171,6 +179,16 @@ The main agent validates it against [`brief.schema.json`](workspace/memory-templ
 Every `pre_class_questions[].question` must appear (fuzzy ≥ 0.9) in the Canvas text; otherwise
 it is dropped and logged as a hallucination. On schema failure the main agent re-prompts once,
 then marks the session partial. The main agent formats the Telegram message, not the subagent.
+
+The mechanics live in the **`brief` skill** ([`workspace/skills/brief/SKILL.md`](workspace/skills/brief/SKILL.md)):
+`brief bundle` builds the task text under the cap (Canvas text whole, readings split evenly, each
+cut reading ending in `[TRUNCATED: kept first N of M characters]`) and records the Canvas text it
+used; `brief validate` extracts the JSON, checks the schema, scores every question against that
+recorded Canvas text with `difflib` and drops the ones under 0.9 as `HALLUCINATION:` lines, and
+hands back the re-prompt text on the first schema failure; `brief format` renders the Telegram
+brief (drafts marked as drafts, Drive links, podcast link or "podcast pending") within Telegram's
+4096-character limit. Tests: `python3 -m unittest discover -s tests`
+([`tests/test_brief.py`](tests/test_brief.py)).
 
 ### Failure recovery (rubric 5)
 
