@@ -36,6 +36,7 @@ class FakeTransport:
     def __init__(self):
         self.routes = {}
         self.calls = []   # (method, url, headers)
+        self.fail_mid_body = False
 
     def add(self, url, status=200, body=None, json_body=None, headers=None, repeat=False):
         payload = json.dumps(json_body).encode() if json_body is not None else (body or b"")
@@ -43,7 +44,7 @@ class FakeTransport:
         self.routes.setdefault(_key(url), []).append((entry, repeat))
         return self
 
-    def __call__(self, method, url, headers, timeout, max_bytes=None):
+    def __call__(self, method, url, headers, timeout, max_bytes=None, sink=None, deadline=None):
         self.calls.append((method, url, dict(headers)))
         queue = self.routes.get(_key(url))
         if not queue:
@@ -55,6 +56,12 @@ class FakeTransport:
             queue[0] = ((status, hdrs, payload), True)   # last response sticks
         if max_bytes is not None and len(payload) > max_bytes:
             raise canvas.CanvasError("FILE_TOO_LARGE", "file body exceeds %d bytes" % max_bytes)
+        if sink is not None and 200 <= status < 300:
+            for i in range(0, len(payload), 4):      # stream in small chunks, like the real transport
+                sink.write(payload[i:i + 4])
+                if self.fail_mid_body:
+                    raise canvas.CanvasError("CANVAS_NET", "connection reset", retryable=True)
+            return canvas.Response(status, hdrs, b"")
         return canvas.Response(status, hdrs, payload)
 
     def urls(self):
@@ -151,9 +158,25 @@ class ErrorMappingTests(CanvasTestCase):
         return self.run_cli("whoami")
 
     def test_fake_token_yields_canvas_401(self):
-        err = self.assertError(self._whoami_status(401), "CANVAS_401")
+        # What Canvas returns for a bogus token.
+        err = self.assertError(self._whoami_status(401, body=b'{"errors":[{"message":"Invalid access token."}]}'),
+                               "CANVAS_401")
         self.assertEqual(err["status"], 401)
         self.assertFalse(err["retryable"])
+
+    def test_401_with_www_authenticate_is_canvas_401(self):
+        self.assertError(self._whoami_status(401, headers={"WWW-Authenticate": 'Bearer realm="canvas-lms"'}),
+                         "CANVAS_401")
+
+    def test_permissions_401_is_canvas_403(self):
+        # Canvas answers 401 "user not authorized" for resources a valid token may not see (locked,
+        # unpublished). That is not a bad token and must not trigger "ask for a new token".
+        body = b'{"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}'
+        err = self.assertError(self._whoami_status(401, body=body), "CANVAS_403")
+        self.assertEqual(err["status"], 401)
+        self.fake = FakeTransport()
+        canvas.transport = self.fake
+        self.assertError(self._whoami_status(401, body=b""), "CANVAS_403")
 
     def test_403_and_404_are_distinct(self):
         self.assertError(self._whoami_status(403), "CANVAS_403")
@@ -298,6 +321,14 @@ class ModulesTests(CanvasTestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(len(self.fake.calls), 1)
 
+    def test_http_next_link_on_our_host_is_not_followed(self):
+        downgrade = "http://%s/api/v1/courses/1/modules?page=2" % HOST
+        self.fake.add(api("/courses/1/modules", **MODULES_Q), json_body=[], headers={"Link": '<%s>; rel="next"' % downgrade})
+        rc, body, _ = self.run_cli("modules", "1")
+        self.assertEqual(rc, 0, body)
+        self.assertEqual(self.fake.urls(), [api("/courses/1/modules", **MODULES_Q)],
+                         "the token must never go over plain http")
+
     def test_v0_alias_list_modules(self):
         self.fake.add(api("/courses/1/modules", **MODULES_Q), json_body=[])
         rc, body, _ = self.run_cli("list_modules", "1")
@@ -397,6 +428,100 @@ class DownloadTests(CanvasTestCase):
         self.assertTrue(body["skipped"])
         self.assertEqual(body["bytes"], len(self.PDF))
         self.assertEqual(len(self.fake.calls), calls_before + 1, "only the metadata call")
+
+    def test_changed_file_with_same_name_and_size_is_refetched(self):
+        self._meta(updated_at="2026-09-20T10:00:00Z")
+        self.fake.add(self.SIGNED, body=self.PDF)
+        self.run_cli("download", "40577", "555", self.dest)
+        new_pdf = b"%PDF-1.4 HELLO"          # same length, new content
+        self.fake = FakeTransport()
+        canvas.transport = self.fake
+        self._meta(updated_at="2026-09-27T10:00:00Z", size=len(new_pdf))
+        self.fake.add(self.SIGNED, body=new_pdf)
+        rc, body, _ = self.run_cli("download", "40577", "555", self.dest)
+        self.assertEqual(rc, 0, body)
+        self.assertFalse(body["skipped"])
+        with open(body["path"], "rb") as fh:
+            self.assertEqual(fh.read(), new_pdf)
+
+    def test_two_files_with_the_same_safe_name_do_not_overwrite(self):
+        self._meta(display_name="Reading.pdf")
+        self.fake.add(self.SIGNED, body=self.PDF)
+        rc, first, _ = self.run_cli("download", "40577", "555", self.dest)
+        self.assertEqual(rc, 0, first)
+
+        other_meta = api("/courses/40577/files/777")
+        other_signed = BASE + "/files/777/download?download_frd=1&verifier=def"
+        other_pdf = b"%PDF-1.4 other"
+        self.fake.add(other_meta, json_body={"id": 777, "display_name": "R\u00e9ading.pdf",   # folds to Reading.pdf
+                                             "size": len(other_pdf), "url": other_signed})
+        self.fake.add(other_signed, body=other_pdf)
+        rc, second, _ = self.run_cli("download", "40577", "777", self.dest)
+        self.assertEqual(rc, 0, second)
+        self.assertNotEqual(first["path"], second["path"])
+        self.assertEqual(os.path.basename(second["path"]), "Reading-777.pdf")
+        with open(first["path"], "rb") as fh:
+            self.assertEqual(fh.read(), self.PDF, "the first file must be untouched")
+        with open(second["path"], "rb") as fh:
+            self.assertEqual(fh.read(), other_pdf)
+        # Reruns are idempotent and keep each file on its own name.
+        rc, again, _ = self.run_cli("download", "40577", "777", self.dest)
+        self.assertTrue(again["skipped"])
+        self.assertEqual(again["path"], second["path"])
+        rc, again, _ = self.run_cli("download", "40577", "555", self.dest)
+        self.assertTrue(again["skipped"])
+        self.assertEqual(again["path"], first["path"])
+
+    def test_existing_file_not_written_by_the_tool_is_not_overwritten(self):
+        os.makedirs(self.dest)
+        mine = os.path.join(self.dest, "Week 4 Reading.pdf")
+        with open(mine, "wb") as fh:
+            fh.write(b"my notes, same size!")
+        self._meta()
+        self.fake.add(self.SIGNED, body=self.PDF)
+        rc, body, _ = self.run_cli("download", "40577", "555", self.dest)
+        self.assertEqual(rc, 0, body)
+        self.assertFalse(body["skipped"])
+        self.assertEqual(os.path.basename(body["path"]), "Week 4 Reading-555.pdf")
+        with open(mine, "rb") as fh:
+            self.assertEqual(fh.read(), b"my notes, same size!")
+
+    def test_failed_download_leaves_no_part_file(self):
+        self._meta()
+        self.fake.add(self.SIGNED, body=self.PDF)
+        self.fake.fail_mid_body = True
+        self.assertError(self.run_cli("download", "40577", "555", self.dest), "CANVAS_NET")
+        self.assertEqual([f for f in os.listdir(self.dest) if not f.startswith(".")], [])
+
+    def test_download_streams_to_disk(self):
+        self._meta()
+        self.fake.add(self.SIGNED, body=self.PDF)
+        seen = []
+        real = self.fake.__call__
+
+        def spy(method, url, headers, timeout, max_bytes=None, sink=None, deadline=None):
+            if url == self.SIGNED:
+                seen.append((sink is not None, deadline is not None))
+            return real(method, url, headers, timeout, max_bytes, sink=sink, deadline=deadline)
+        canvas.transport = spy
+        rc, body, _ = self.run_cli("download", "40577", "555", self.dest)
+        self.assertEqual(rc, 0, body)
+        self.assertEqual(seen, [(True, True)], "file body goes to a sink under a deadline, not into memory")
+
+    def test_total_deadline_covers_redirect_hops(self):
+        self._meta()
+        self.fake.add(self.SIGNED, status=302, body=b"", headers={"Location": self.STORAGE})
+        self.fake.add(self.STORAGE, body=self.PDF)
+        ticks = iter([0.0, 0.0, canvas.DOWNLOAD_DEADLINE + 1])
+        orig = canvas.clock
+        canvas.clock = lambda: next(ticks)
+        try:
+            err = self.assertError(self.run_cli("download", "40577", "555", self.dest), "CANVAS_NET")
+        finally:
+            canvas.clock = orig
+        self.assertIn("deadline", err["message"])
+        self.assertTrue(err["retryable"])
+        self.assertNotIn(self.STORAGE, self.fake.urls())
 
     def test_display_name_is_sanitized_against_traversal(self):
         self._meta(display_name="../../../etc/passwd")
@@ -593,6 +718,25 @@ class SafeBasenameTests(unittest.TestCase):
         long_name = "x" * 300 + ".pdf"
         self.assertLessEqual(len(sb(long_name)), 200)
         self.assertTrue(sb(long_name).endswith(".pdf"))
+
+
+class StreamCopyTests(unittest.TestCase):
+    def test_copy_limited_streams_and_enforces_limits(self):
+        out = []
+        self.assertEqual(canvas._copy_limited(io.BytesIO(b"abcdef"), out.append, 10), 6)
+        self.assertEqual(b"".join(out), b"abcdef")
+        with self.assertRaises(canvas.CanvasError) as ctx:
+            canvas._copy_limited(io.BytesIO(b"abcdef"), out.append, 3)
+        self.assertEqual(ctx.exception.code, "FILE_TOO_LARGE")
+        orig = canvas.clock
+        canvas.clock = lambda: 100.0
+        try:
+            with self.assertRaises(canvas.CanvasError) as ctx:
+                canvas._copy_limited(io.BytesIO(b"abcdef"), out.append, None, deadline=50.0)
+        finally:
+            canvas.clock = orig
+        self.assertEqual(ctx.exception.code, "CANVAS_NET")
+        self.assertTrue(ctx.exception.retryable)
 
 
 class LinkHeaderTests(unittest.TestCase):

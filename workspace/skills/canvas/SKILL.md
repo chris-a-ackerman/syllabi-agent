@@ -41,7 +41,7 @@ exit 1 is a crash. Lists are fetched with `per_page=100` and every `Link: rel="n
 | --- | --- |
 | `canvas modules <course_id>` | `items: [{module, module_id, position, item_position, item_type: File\|Page\|ExternalUrl\|Assignment\|Discussion\|Quiz\|SubHeader\|ExternalTool, title, id, content_id, url, html_url, page_url, external_url, published, content_type, size, locked_for_user}]`, one row per module item, `modules: <count>` |
 | `canvas files <course_id> [--folder <path>]` | `files: [{id, display_name, filename, content_type, size, updated_at, folder, folder_id, locked_for_user}]`, newest first. `folder` is the path under "course files" (e.g. `Readings/Week 4`). `--folder` keeps files whose folder path contains the text, case-insensitive. |
-| `canvas download <course_id> <file_id> <dest_dir>` | `path, bytes, sha256, skipped, file_id, display_name, content_type`. Writes `<dest_dir>/<safe display_name>`. `dest_dir` must be under `$DATA_DIR/readings/`. If the file is already there with the same size, nothing is fetched and `skipped: true`. |
+| `canvas download <course_id> <file_id> <dest_dir>` | `path, bytes, sha256, skipped, file_id, display_name, content_type`. Writes `<dest_dir>/<safe display_name>`. `dest_dir` must be under `$DATA_DIR/readings/`. If this file id was already downloaded there and Canvas's `updated_at` and size are unchanged, nothing is fetched and `skipped: true`. If another file already holds the name, this one is saved as `<name>-<file_id>.<ext>` instead (always use the returned `path`). |
 | `canvas assignments <course_id> [--upcoming]` | `assignments: [{id, name, due_at, html_url, description_text, links: [{text, href}], submission_types, submitted}]`. `description_text` is the full description with HTML stripped, never truncated: the pre-class questions live here. `--upcoming` = Canvas's `bucket=upcoming`. |
 | `canvas page <course_id> <page_url_or_id>` | `page: {url, title, body_text, links, updated_at, html_url}` |
 | `canvas whoami` | `user: {id, name}` (auth smoke test) |
@@ -55,11 +55,11 @@ The V0 names still work as aliases: `list_modules`, `list_files`, `download_file
 
 | code | meaning | what to do |
 | --- | --- | --- |
-| `CANVAS_401` | token missing, expired or revoked | stop Canvas calls this run; ask Chris for a new `CANVAS_TOKEN` |
+| `CANVAS_401` | token missing, expired or revoked (Canvas's "user not authorized" 401 is reported as `CANVAS_403`) | stop Canvas calls this run; ask Chris for a new `CANVAS_TOKEN` |
 | `CANVAS_403` | token valid but the resource is forbidden or locked | fall back to the syllabus link if there is one, else **needs-human** |
 | `CANVAS_404` | course, file or page not found | log it, note it in course-notes, continue |
 | `CANVAS_RATE` | 429 twice in a row (the tool already waited and retried once) | leave it for the next run |
-| `CANVAS_NET` | 5xx, timeout, non-JSON body, or a refused redirect (non-https, private address) | `retryable: true` means retry once, then move on |
+| `CANVAS_NET` | 5xx, timeout, the 50 s download deadline, non-JSON body, or a refused redirect (non-https, private address) | `retryable: true` means retry once, then move on |
 | `FILE_TOO_LARGE` | > 100 MB (Maritime transfer cap) | skip the file; put `detail.canvas_url` in the brief |
 | `BAD_FILENAME` | the Canvas file name sanitizes to nothing | skip the file; tell Chris |
 | `USAGE` | bad arguments or configuration (`dest_dir` outside `/data/readings/`, `CANVAS_BASE_URL` unset) | a bug in the call: fix it, don't retry |
@@ -91,5 +91,8 @@ actually live"), so the next run starts there.
   rejected: a course member can upload a file called `../../x`, and it must land in `dest_dir`.
 - The pre-signed download URL redirects to a storage host. The token is sent only to
   `CANVAS_BASE_URL`'s host and never on a redirect; redirects must be https and must not resolve
-  to private, loopback or link-local addresses.
+  to private, loopback or link-local addresses. Next-page links are followed only when https on
+  the same host.
+- Downloads stream to `<name>.part` (removed on failure) under a 50 s total deadline, and
+  `dest_dir/.canvas-manifest.json` tracks which file id owns which name.
 - The full contract is `docs/tool-contract.md` §2 in the repo. Tests: `python3 -m unittest discover -s tests`.

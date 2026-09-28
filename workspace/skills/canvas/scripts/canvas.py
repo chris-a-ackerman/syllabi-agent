@@ -51,7 +51,7 @@ from html.parser import HTMLParser
 from typing import Any, Dict, List, Optional
 
 API_TIMEOUT = 20            # seconds per API request; the agent has a 30 s reply budget
-DOWNLOAD_TIMEOUT = 50       # seconds for a file body; Maritime caps a command at 60 s
+DOWNLOAD_DEADLINE = 50      # seconds for a whole download (all hops + body); Maritime caps a command at 60 s
 PER_PAGE = 100
 MAX_PAGES = 100             # hard stop for Link: rel="next" loops
 MAX_REDIRECTS = 5
@@ -62,6 +62,11 @@ USER_AGENT = "class-prep-agent/canvas (+https://github.com/chris-a-ackerman/syll
 _SAFE_NAME_CHARS = re.compile(r"[^A-Za-z0-9._ -]")
 _NEXT_LINK = re.compile(r'<([^>]+)>\s*;\s*rel="next"')
 _RATE_LIMIT_BODY = b"Rate Limit Exceeded"
+# 401 bodies that mean the token itself is bad. Canvas also answers 401 "user not authorized to
+# perform that action" for resources the (valid) token may not see; that one is a CANVAS_403.
+_BAD_TOKEN_BODY = re.compile(rb"invalid access token|access token (?:has )?expired|expired access token|"
+                             rb"revoked|user authorization required", re.I)
+MANIFEST_NAME = ".canvas-manifest.json"
 
 Response = namedtuple("Response", "status headers body")
 
@@ -132,28 +137,40 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 _opener = urllib.request.build_opener(_NoRedirect)
 
 
-def _read_limited(fp, max_bytes):
-    chunks = []
+def _copy_limited(fp, write, max_bytes, deadline=None):
     total = 0
     while True:
+        if deadline is not None and clock() > deadline:
+            raise CanvasError("CANVAS_NET", "download exceeded the %d s deadline" % DOWNLOAD_DEADLINE,
+                              retryable=True)
         chunk = fp.read(1024 * 1024)
         if not chunk:
-            break
+            return total
         total += len(chunk)
         if max_bytes is not None and total > max_bytes:
             raise CanvasError("FILE_TOO_LARGE", "file body exceeds %d bytes" % max_bytes,
                               detail={"limit": max_bytes})
-        chunks.append(chunk)
+        write(chunk)
+
+
+def _read_limited(fp, max_bytes, deadline=None):
+    chunks = []
+    _copy_limited(fp, chunks.append, max_bytes, deadline)
     return b"".join(chunks)
 
 
-def _urllib_transport(method, url, headers, timeout, max_bytes=None):
-    """One HTTP request, no redirects followed. Returns Response; raises CanvasError on network failure."""
+def _urllib_transport(method, url, headers, timeout, max_bytes=None, sink=None, deadline=None):
+    """One HTTP request, no redirects followed. Returns Response; raises CanvasError on network failure.
+    With `sink` (a writable), a 2xx body is streamed into it instead of being buffered, and the
+    returned Response has an empty body. `deadline` is a clock() value the body read must beat."""
     req = urllib.request.Request(url, headers=headers, method=method)
     try:
         with _opener.open(req, timeout=timeout) as resp:
-            return Response(resp.status, {k.lower(): v for k, v in resp.headers.items()},
-                            _read_limited(resp, max_bytes))
+            hdrs = {k.lower(): v for k, v in resp.headers.items()}
+            if sink is not None and 200 <= resp.status < 300:
+                _copy_limited(resp, sink.write, max_bytes, deadline)
+                return Response(resp.status, hdrs, b"")
+            return Response(resp.status, hdrs, _read_limited(resp, max_bytes, deadline))
     except urllib.error.HTTPError as e:
         try:
             body = e.read()
@@ -173,6 +190,7 @@ def _resolve_host(host):
 transport = _urllib_transport
 resolve_host = _resolve_host
 sleep = time.sleep
+clock = time.monotonic
 
 
 # --------------------------------------------------------------------------- HTTP helpers
@@ -198,19 +216,25 @@ def _retry_after(resp):
     return max(0.0, min(wait, RATE_RETRY_MAX_SLEEP))
 
 
-def _request(cfg, method, url, auth, timeout=API_TIMEOUT, max_bytes=None, accept="application/json"):
+def _request(cfg, method, url, auth, timeout=API_TIMEOUT, max_bytes=None, accept="application/json",
+             sink=None, deadline=None):
     headers = {"User-Agent": USER_AGENT, "Accept": accept}
     if auth:
         if not cfg.token:
             raise CanvasError("CANVAS_401", "no Canvas token: set CANVAS_TOKEN (or CANVAS_API_TOKEN)", status=None)
         headers["Authorization"] = "Bearer " + cfg.token
     cfg.log_request(method, url)
-    resp = transport(method, url, headers, timeout, max_bytes)
+    extra = {}
+    if sink is not None:
+        extra["sink"] = sink
+    if deadline is not None:
+        extra["deadline"] = deadline
+    resp = transport(method, url, headers, timeout, max_bytes, **extra)
     if _is_rate_limited(resp):
         wait = _retry_after(resp)
         cfg.log("rate limited (%d); retrying once after %.1fs" % (resp.status, wait))
         sleep(wait)
-        resp = transport(method, url, headers, timeout, max_bytes)
+        resp = transport(method, url, headers, timeout, max_bytes, **extra)
         if _is_rate_limited(resp):
             raise CanvasError("CANVAS_RATE", "Canvas rate limit hit twice; try again on the next run",
                               retryable=True, status=resp.status)
@@ -222,7 +246,9 @@ def _raise_for_status(resp, what):
     if 200 <= s < 300:
         return
     if s == 401:
-        raise CanvasError("CANVAS_401", "Canvas rejected the token (401) for %s" % what, status=401)
+        if _is_bad_token(resp):
+            raise CanvasError("CANVAS_401", "Canvas rejected the token (401) for %s" % what, status=401)
+        raise CanvasError("CANVAS_403", "not authorized (401 without a token error) for %s" % what, status=401)
     if s == 403:
         raise CanvasError("CANVAS_403", "forbidden (403) for %s" % what, status=403)
     if s == 404:
@@ -232,6 +258,14 @@ def _raise_for_status(resp, what):
     if s >= 500:
         raise CanvasError("CANVAS_NET", "Canvas returned HTTP %d for %s" % (s, what), retryable=True, status=s)
     raise CanvasError("CANVAS_NET", "unexpected HTTP %d for %s" % (s, what), retryable=False, status=s)
+
+
+def _is_bad_token(resp):
+    """A 401 means a bad token only when Canvas says so: a WWW-Authenticate challenge, or a body
+    naming the token. Otherwise it's a permissions 401 (e.g. a locked resource)."""
+    if resp.headers.get("www-authenticate"):
+        return True
+    return bool(_BAD_TOKEN_BODY.search((resp.body or b"")[:4096]))
 
 
 def _decode_json(resp, what):
@@ -278,8 +312,9 @@ def api_get(cfg, path, params=None, paginate=False):
         nxt = _next_link(resp.headers.get("link"))
         if not nxt:
             break
-        if urllib.parse.urlparse(nxt).netloc.lower() != cfg.host:
-            cfg.log("ignoring next-page link on another host")   # the token stays on our host
+        parsed = urllib.parse.urlparse(nxt)
+        if parsed.scheme != "https" or parsed.netloc.lower() != cfg.host:
+            cfg.log("ignoring a next-page link that is not https on our host")   # the token stays on our host
             break
         url = nxt
     return items
@@ -456,10 +491,16 @@ def _sha256_file(path):
     return digest.hexdigest()
 
 
-def _fetch_file(cfg, url):
-    """Fetch a pre-signed file URL. The token goes only to our own host and only on the first hop;
-    every redirect must be https and point at a public address."""
+def _fetch_file(cfg, url, sink):
+    """Stream a pre-signed file URL into `sink`. The token goes only to our own host and only on the
+    first hop; every redirect must be https and point at a public address. The whole fetch, redirects
+    included, must finish within DOWNLOAD_DEADLINE seconds."""
+    deadline = clock() + DOWNLOAD_DEADLINE
     for hop in range(MAX_REDIRECTS + 1):
+        remaining = deadline - clock()
+        if remaining <= 0:
+            raise CanvasError("CANVAS_NET", "download exceeded the %d s deadline" % DOWNLOAD_DEADLINE,
+                              retryable=True)
         parsed = urllib.parse.urlparse(url)
         if parsed.scheme != "https":
             raise CanvasError("CANVAS_NET", "refusing a non-https download url", retryable=False,
@@ -467,8 +508,8 @@ def _fetch_file(cfg, url):
         same_host = parsed.netloc.lower() == cfg.host
         if not same_host:
             _require_public_host(parsed.hostname)
-        resp = _request(cfg, "GET", url, auth=(same_host and hop == 0), timeout=DOWNLOAD_TIMEOUT,
-                        max_bytes=MAX_FILE_BYTES, accept="*/*")
+        resp = _request(cfg, "GET", url, auth=(same_host and hop == 0), timeout=max(1.0, remaining),
+                        max_bytes=MAX_FILE_BYTES, accept="*/*", sink=sink, deadline=deadline)
         if resp.status in (301, 302, 303, 307, 308):
             location = resp.headers.get("location")
             if not location:
@@ -476,7 +517,7 @@ def _fetch_file(cfg, url):
             url = urllib.parse.urljoin(url, location)
             continue
         _raise_for_status(resp, "file download")
-        return resp.body
+        return
     raise CanvasError("CANVAS_NET", "too many redirects while fetching the file", retryable=False)
 
 
@@ -570,6 +611,84 @@ def cmd_files(cfg, args):
     return result
 
 
+class _PartWriter:
+    """Writes a download to `<final>.part`, opened lazily on the first byte (so a refused redirect
+    leaves nothing behind), hashing as it goes. discard() removes the partial file."""
+
+    def __init__(self, path):
+        self.path = path
+        self.fh = None
+        self.opened = False
+        self.bytes = 0
+        self.sha256 = hashlib.sha256()
+
+    def open(self):
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        self.fh = open(self.path, "wb")
+        self.opened = True
+
+    def write(self, chunk):
+        if self.fh is None:
+            self.open()
+        self.fh.write(chunk)
+        self.bytes += len(chunk)
+        self.sha256.update(chunk)
+
+    def close(self):
+        if self.fh is not None:
+            self.fh.close()
+            self.fh = None
+
+    def discard(self):
+        self.close()
+        if self.opened:
+            try:
+                os.unlink(self.path)
+            except FileNotFoundError:
+                pass
+
+
+def _load_manifest(dest):
+    """{name: {file_id, updated_at, bytes, sha256}} for files this tool wrote into dest."""
+    try:
+        with open(os.path.join(dest, MANIFEST_NAME), encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    files = data.get("files") if isinstance(data, dict) else None
+    return {k: v for k, v in (files or {}).items() if isinstance(v, dict)}
+
+
+def _save_manifest(dest, manifest):
+    path = os.path.join(dest, MANIFEST_NAME)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump({"version": 1, "files": manifest}, fh, indent=1, sort_keys=True)
+    os.replace(tmp, path)
+
+
+def _choose_name(dest, manifest, name, file_id):
+    """The name this file_id owns in dest. Reuses the name it was saved under before; otherwise takes
+    `name` unless another file (a different file_id, or a file this tool didn't write) holds it, in
+    which case it becomes `<root>-<file_id><ext>`."""
+    file_id = str(file_id)
+    for existing, entry in manifest.items():
+        if str(entry.get("file_id")) == file_id:
+            return existing
+
+    def free(candidate):
+        return candidate not in manifest and not os.path.lexists(os.path.join(dest, candidate))
+
+    if free(name):
+        return name
+    root, ext = os.path.splitext(name)
+    alt = safe_basename("%s-%s%s" % (root, file_id, ext))
+    if alt and free(alt):
+        return alt
+    raise CanvasError("BAD_FILENAME", "another file already holds the name %s in dest_dir" % name,
+                      detail={"file_id": file_id})
+
+
 def cmd_download(cfg, args):
     dest = _checked_dest_dir(cfg, args.dest_dir)
     what = "/courses/%s/files/%s" % (_q(args.course_id), _q(args.file_id))
@@ -592,19 +711,34 @@ def cmd_download(cfg, args):
     if not url:
         raise CanvasError("CANVAS_403", "Canvas returned no download url for this file", status=403,
                           detail={"canvas_url": canvas_url})
+    manifest = _load_manifest(dest)
+    name = _choose_name(dest, manifest, name, args.file_id)
     final = os.path.join(dest, name)
     common = {"ok": True, "file_id": args.file_id, "display_name": name,
               "content_type": meta.get("content-type"), "path": final}
-    if os.path.isfile(final) and isinstance(size, int) and os.path.getsize(final) == size:
-        common.update({"bytes": size, "sha256": _sha256_file(final), "skipped": True})
+    entry = manifest.get(name)
+    if (entry and os.path.isfile(final) and entry.get("updated_at") == meta.get("updated_at")
+            and os.path.getsize(final) == entry.get("bytes")
+            and (not isinstance(size, int) or size == entry.get("bytes"))):
+        common.update({"bytes": entry["bytes"], "sha256": entry.get("sha256") or _sha256_file(final),
+                       "skipped": True})
         return common
-    body = _fetch_file(cfg, url)
-    os.makedirs(dest, exist_ok=True)
     part = final + ".part"
-    with open(part, "wb") as fh:
-        fh.write(body)
-    os.replace(part, final)
-    common.update({"bytes": len(body), "sha256": hashlib.sha256(body).hexdigest(), "skipped": False})
+    sink = _PartWriter(part)
+    try:
+        _fetch_file(cfg, url, sink)
+        sink.close()
+        if not sink.opened:            # an empty 2xx body still yields an (empty) file
+            sink.open()
+            sink.close()
+        os.replace(part, final)
+    except BaseException:
+        sink.discard()
+        raise
+    manifest[name] = {"file_id": str(args.file_id), "updated_at": meta.get("updated_at"),
+                      "bytes": sink.bytes, "sha256": sink.sha256.hexdigest()}
+    _save_manifest(dest, manifest)
+    common.update({"bytes": sink.bytes, "sha256": sink.sha256.hexdigest(), "skipped": False})
     return common
 
 
