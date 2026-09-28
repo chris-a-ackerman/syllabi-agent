@@ -37,12 +37,12 @@ exit 1 is a crash. `<key>` is the prep-log record key `<course>@<YYYY-MM-DD>`.
 
 | Command | What it does | Returns (`ok: true` plus) |
 | --- | --- | --- |
-| `bundle <key> [--session FILE\|-] [--canvas FILE]… [--assignment-id ID]… [--readings-json FILE] [--reading PATH]… [--notes FILE\|-] [--cap-chars N] [--print]` | Writes the exact task text (prompt head from `agents/brief-writer.md` + `## SESSION`, `## CANVAS TEXT` with one `### CANVAS: <title> (<url>)` per assignment/page, `## READINGS` with one `### READING: <title>` each, `## COURSE NOTES`) to `/data/work/<course>/<date>/brief-input.md`, and a sidecar `brief-input.json` (the Canvas text used for validation, per-reading stats). Canvas text is kept whole; readings split the remaining budget evenly, and a cut one ends with `[TRUNCATED: kept first N of M characters]`. | `task_path, sidecar_path, task_name` (for `sessions_spawn`), `chars, est_tokens, cap_chars, canvas[] {title, url, chars, kept, truncated}, readings[] {title, path, chars, kept, truncated, extractor, warning}, skipped[], truncated[], warnings[]`; `task` with `--print` |
-| `validate <key> --reply FILE\|- [--attempt N] [--threshold R] [--canvas FILE]…` | Saves the raw reply as `brief-reply.<attempt>.txt`, pulls the single JSON object out of it (code fences and prose are ignored), checks it against `memory-templates/brief.schema.json`, fuzzy-scores every question against the sidecar's Canvas text, drops those under the threshold, and writes the cleaned brief to `brief-output.json`. | `attempt, brief_path, reply_path, questions {returned, kept, dropped}, kept[] {question, score, source, source_ok}, dropped[] {question, score, best_match, log_line}, log_lines[]` (`HALLUCINATION: …`, one per drop), `warnings[]` |
-| `format <key> [--record FILE\|-] [--brief FILE] [--drive-link URL]… [--podcast-url URL] [--no-podcast] [--dropped N]` | Renders the Telegram brief: course and class time, topic, why it matters, key arguments, prep checklist, the pre-class questions with each draft marked `DRAFT`, Drive links, and the podcast link or **"🎧 podcast pending — link to follow"**. The brief comes from `--brief`, else the record's `brief`, else `brief-output.json`; with none it sends the links and podcast line with a one-line note. Writes `brief-telegram.txt` (and `.2.txt`… when over the limit). | `text, parts[], paths[], send_with[], chars, has_brief, brief_source, questions, drive_links[], podcast: ready\|pending\|unavailable, includes_podcast, dropped` |
+| `bundle <key> [--session FILE\|-] [--canvas FILE]… [--assignment-id ID]… [--readings-json FILE] [--reading PATH]… [--notes FILE\|-] [--cap-chars N] [--print]` | Writes the exact task text (prompt head from `agents/brief-writer.md` + `## SESSION`, `## CANVAS TEXT` with one `### CANVAS: <title> (<url>)` per assignment/page, `## READINGS` with one `### READING: <title>` each, `## COURSE NOTES`) to `/data/work/<course>/<date>/brief-input.md`, and a sidecar `brief-input.json` (the Canvas text used for validation, per-reading stats). Canvas text is kept whole; readings split the remaining budget evenly, and a cut one ends with `[TRUNCATED: kept first N of M characters]`. | `task_path, sidecar_path, task_name` (for `sessions_spawn`), `cleared[]` (the previous run's `brief-reply.*.txt`, `brief-validation.json`, `brief-output.json`, removed so attempts count from 1 again), `chars, est_tokens, cap_chars, canvas[] {title, url, chars, kept, truncated}, readings[] {title, path, chars, kept, truncated, extractor, warning}, skipped[], truncated[], warnings[]`; `task` with `--print` |
+| `validate <key> --reply FILE\|- [--attempt N] [--threshold R] [--canvas FILE]…` | Saves the raw reply as `brief-reply.<attempt>.txt`, pulls the single JSON object out of it (code fences and prose are ignored), checks it against `memory-templates/brief.schema.json`, fuzzy-scores every question against the sidecar's Canvas text, drops those under the threshold, and writes the cleaned brief to `brief-output.json`. A kept question whose `source` names no Canvas section gets the matched section's title instead. | `attempt, brief_path, reply_path, questions {returned, kept, dropped}, kept[] {question, score, source, source_ok, source_original?}, dropped[] {question, score, best_match, reason, log_line}, log_lines[]` (`HALLUCINATION: …`, one per drop), `warnings[]` |
+| `format <key> [--record FILE\|-] [--brief FILE] [--drive-link URL]… [--podcast-url URL] [--no-podcast] [--dropped N]` | Renders the Telegram brief: course and class time, topic, why it matters, key arguments, prep checklist, the pre-class questions with each draft marked `DRAFT`, Drive links, and the podcast link or **"🎧 podcast pending — link to follow"**. The brief comes from `--brief`, else the record's `brief`, else `brief-output.json`; with none it sends the links and podcast line with a one-line note. Writes `brief-telegram.txt` (and `.2.txt`… when over the limit). | `text, parts[], paths[], send_with[], chars, utf16_units, has_brief, brief_source, questions, drive_links[], podcast: ready\|pending\|unavailable, includes_podcast, dropped` |
 | `format-podcast <key> --url URL [--record FILE\|-]` | The later "🎧 podcast ready: <link>" message, written to `brief-podcast-telegram.txt`. | `text, path, chars` |
 | `prompt` | The prompt head, read from `agents/brief-writer.md` (the blockquote under "## Prompt"). | `prompt, source, chars` |
-| `score --question TEXT --canvas FILE… [--threshold R]` | Fuzzy-scores one question (evals, debugging). | `score, best_match, kept, threshold` |
+| `score --question TEXT --canvas FILE… [--threshold R]` | Fuzzy-scores one question (evals, debugging). | `score, best_match, kept, reason, threshold` |
 
 Inputs the commands accept:
 
@@ -106,13 +106,21 @@ Nothing here is retryable. A dropped question is **not** an error: `validate` st
   2020-12 subset that covers `brief.schema.json` exactly (type, required, properties,
   additionalProperties, items, min/max items and length, enum, const, pattern).
 - The fuzzy score is `difflib.SequenceMatcher` on normalised text (lower-case, punctuation and
-  typographic quotes folded, whitespace collapsed), best over the Canvas sentences, lines, bullet
-  items and same-length token windows; a verbatim copy scores 1.0, a paraphrase or a reordering
-  falls under 0.9. The Canvas text comes from the sidecar written by `bundle`, never from the
+  typographic quotes folded, whitespace collapsed, "n't" → "not"), best over **whole** Canvas
+  units: sentences, lines, bullet items (a "1." / "Q1:" label stripped) and the clause after a
+  label colon. A verbatim copy scores 1.0; a fragment of a longer sentence, a paraphrase or a
+  reordering falls under 0.9. Hard rules on top of the ratio, at any threshold: a question under 4
+  words scores 0, and a match is rejected when any number or negation word differs, or a content
+  word was changed, added or left out (a spelling variant like "agent"/"agents" is tolerated).
+  `dropped[].reason` says which rule fired. The Canvas text comes from the sidecar written by `bundle`, never from the
   bundle Markdown, so a reading that contains a fake `### CANVAS:` header cannot add questions.
 - The bundle is verbatim except for three mechanical changes: control characters are removed, a
-  content line starting with `#` is indented four spaces so it cannot pose as a section header,
-  and over-budget text is cut at a word boundary with the truncation note.
+  content line starting with `#`, `---` or `[TRUNCATED` is indented four spaces so it cannot pose
+  as a section header, the prompt/bundle separator or a truncation note, and over-budget text is
+  cut at a word boundary with the truncation note.
+- Telegram's 4096 limit is counted in UTF-16 code units (an emoji is 2), as Telegram counts it.
+- The "draft questions dropped" count comes from `brief-validation.json`; the record's
+  `HALLUCINATION:` history entries are only a fallback when that file is missing.
 - Nothing is written outside `/data/work/<course>/<date>/`: `brief-input.md`, `brief-input.json`,
   `brief-reply.<n>.txt`, `brief-output.json`, `brief-validation.json`, `brief-telegram*.txt`,
   `brief-podcast-telegram.txt`.

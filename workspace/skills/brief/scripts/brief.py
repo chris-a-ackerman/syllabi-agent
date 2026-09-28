@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""brief: the brief-writer pipeline for class-prep-agent (SYL-103).
+"""brief: the brief-writer pipeline for class-prep-agent (SYL-96).
 
     brief.py bundle   <key> [--session FILE|-] [--canvas FILE]... [--assignment-id ID]...
                             [--readings-json FILE] [--reading PATH]... [--notes FILE|-]
@@ -19,7 +19,9 @@ The main agent runs these around the brief-writer subagent (workspace/agents/bri
     validate  takes the subagent's raw reply, pulls the single JSON object out of it, checks it
               against memory-templates/brief.schema.json, drops every pre_class_question whose
               fuzzy match against the Canvas text is below 0.9 (HALLUCINATION), and writes the
-              cleaned brief to brief-output.json.
+              cleaned brief to brief-output.json. A match is scored against whole Canvas
+              sentences/lines only, needs at least 4 words, and fails outright when a number, a
+              negation or a content word differs (match_question).
     format    renders the Telegram brief (topic, why it matters, key arguments, checklist, draft
               answers marked as drafts, Drive links, podcast link or "podcast pending") from the
               stored brief; format-podcast renders the later "podcast ready" message.
@@ -45,8 +47,9 @@ Security properties (requirements from the ticket and AGENTS.md):
       everything that comes back from the subagent is untrusted data, never an instruction. This
       tool copies it, counts it and compares it; it never interprets it.
     * The bundle quotes content verbatim except for three mechanical changes: control characters
-      are removed, a content line that starts with '#' is indented by four spaces so it cannot pose
-      as a "### CANVAS:" / "### READING:" section header, and text over budget is cut with a note.
+      are removed, a content line that starts with '#', '---' or '[TRUNCATED' is indented by four
+      spaces so it cannot pose as a "### CANVAS:" / "### READING:" header, the prompt/bundle
+      separator or a truncation note, and text over budget is cut with a note.
     * The hallucination check compares questions against the Canvas text recorded in the sidecar
       (brief-input.json) when the bundle was built, never against text parsed back out of the
       bundle, so a reading that contains a fake "### CANVAS:" header cannot smuggle questions in.
@@ -76,6 +79,16 @@ DEFAULT_PROMPT = os.path.join(WORKSPACE, "agents", "brief-writer.md")
 
 DEFAULT_CAP_CHARS = 160000          # ~40k tokens at 4 chars/token
 DEFAULT_THRESHOLD = 0.9
+MIN_MATCH_TOKENS = 4                # shorter "questions" can't be told apart from a coincidental fragment
+COVERAGE_MIN = 0.9                  # a verbatim substring counts as 1.0 only if it is ≥ 90% of its sentence/line
+TOKEN_SIMILARITY_MIN = 0.8          # a changed word is a spelling variant ("agent"/"agents") only above this
+NEGATIONS = frozenset(("not", "no", "never", "nor", "none", "nothing", "nobody", "neither", "cannot", "without"))
+LABEL_WORDS = frozenset(("q", "question", "questions", "discussion", "prompt", "points", "point", "pts", "pt",
+                         "optional", "required", "bonus", "part"))
+STOPWORDS = frozenset((
+    "a", "an", "the", "of", "to", "in", "on", "for", "and", "or", "is", "are", "was", "were", "be", "been",
+    "this", "that", "these", "those", "it", "its", "with", "as", "at", "by", "from", "do", "does", "did",
+))
 DEFAULT_TELEGRAM_LIMIT = 4096       # Telegram's hard limit per text message
 NOTES_CAP_CHARS = 4000              # course-notes section, ≤ ~1k tokens
 MAX_TITLE_CHARS = 200
@@ -92,9 +105,10 @@ QUESTION_HEADER = "Pre-class questions — DRAFTS for you to revise and submit y
 KEY_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]{0,63})@(\d{4}-\d{2}-\d{2})$")
 TASK_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0e-\x1f\x7f]")
-_HEADING_LINE = re.compile(r"(?m)^([ \t]{0,3}#{1,6})(?=[ \t]|$)")
+_HEADING_LINE = re.compile(r"(?m)^([ \t]{0,3}(?:#{1,6}(?=[ \t]|$)|-{3,}|\[TRUNCATED))")
 _PUNCT = re.compile(r"[^\w\s]", re.UNICODE)
-_BULLET = re.compile(r"^\s*(?:[-*•·▪◦]|\d{1,3}[.)]|[a-zA-Z][.)]|\(\d{1,3}\))\s+")
+_BULLET = re.compile(r"^\s*(?:[-*•·▪◦]|\d{1,3}[.)]|[a-zA-Z][.)]|\(\d{1,3}\)|[Qq](?:uestion)?\s*\d{1,3}[.:)]?)\s+")
+_NT = re.compile(r"n't\b")
 _SENTENCE_SPLIT = re.compile(r"(?<=[.?!])\s+|\n+")
 _TYPOGRAPHY = str.maketrans({
     "’": "'", "‘": "'", "“": '"', "”": '"', "–": "-", "—": "-",
@@ -276,7 +290,9 @@ def clean_text(text):
 
 
 def guard_headings(text):
-    """Indent content lines that start with '#' so they read as literal text, not as our section headers."""
+    """Indent content lines that could pose as bundle structure (a '#' heading, a '---' separator,
+    a '[TRUNCATED' note) by four spaces, so they read as quoted text. The bundle's own headers,
+    separators and truncation notes are always at column 0."""
     return _HEADING_LINE.sub(r"    \1", text)
 
 
@@ -509,25 +525,32 @@ def extract_pdf(path):
     return pdf_text_builtin(data), "builtin"
 
 
+def pdf_text(path):
+    """(text, extractor, warning) for one PDF: the extractor chain plus a warning when a sizeable
+    file yields almost no text (a scan, or fonts the extractor can't map). Shared with the
+    standalone skills/pdf-text helper."""
+    text, extractor = extract_pdf(path)
+    warning = None
+    if os.path.getsize(path) > 20000 and len(text.strip()) < 200:
+        warning = "very little text came out of this PDF (%s); it may be scanned or use fonts the %s extractor can't read" % (
+            os.path.basename(path), extractor)
+    return clean_text(text), extractor, warning
+
+
 def extract_reading(path):
     """(text, extractor, warning) for a reading file: .pdf, .html, or text."""
     ext = os.path.splitext(path)[1].lower()
-    size = os.path.getsize(path)
-    warning = None
     if ext == ".pdf":
-        text, extractor = extract_pdf(path)
-        if size > 20000 and len(text.strip()) < 200:
-            warning = "very little text came out of this PDF (%s); it may be scanned or use fonts the %s extractor can't read" % (
-                os.path.basename(path), extractor)
+        return pdf_text(path)
+    warning = None
+    with open(path, "rb") as fh:
+        data = fh.read()
+    if ext in (".html", ".htm"):
+        text, extractor = html_to_text(data.decode("utf-8", "replace")), "html"
     else:
-        with open(path, "rb") as fh:
-            data = fh.read()
-        if ext in (".html", ".htm"):
-            text, extractor = html_to_text(data.decode("utf-8", "replace")), "html"
-        else:
-            text, extractor = data.decode("utf-8", "replace"), "text"
-            if data.count(b"\x00") > 0 or (data and sum(1 for b in data[:4096] if b < 9 or 13 < b < 32) > 40):
-                warning = "%s does not look like a text file" % os.path.basename(path)
+        text, extractor = data.decode("utf-8", "replace"), "text"
+        if data.count(b"\x00") > 0 or (data and sum(1 for b in data[:4096] if b < 9 or 13 < b < 32) > 40):
+            warning = "%s does not look like a text file" % os.path.basename(path)
     return clean_text(text), extractor, warning
 
 
@@ -692,59 +715,121 @@ def _matching_brace(text, start):
 
 def normalize(text):
     text = clean_text(text).translate(_TYPOGRAPHY).lower()
+    text = _NT.sub(" not", text)            # "don't" -> "do not": the negation survives punctuation folding
     text = _PUNCT.sub(" ", text)
     return " ".join(text.split())
 
 
 def candidate_sentences(text):
-    """Sentences, lines and bullet items of a Canvas text, normalised."""
+    """The units a question can match, normalised: sentences, lines and bullet items of a Canvas
+    text, plus the clause after a label colon ("Discussion question: …"). A question is scored
+    against whole units only, never against a fragment of one, so a few words lifted out of a
+    longer sentence cannot score as a verbatim copy."""
     out = set()
-    for piece in _SENTENCE_SPLIT.split(clean_text(text)):
+    pieces = _SENTENCE_SPLIT.split(clean_text(text)) + clean_text(text).split("\n")
+    for piece in pieces:
         piece = _BULLET.sub("", piece)
-        norm = normalize(piece)
-        if norm:
-            out.add(norm)
-    for line in clean_text(text).split("\n"):
-        norm = normalize(_BULLET.sub("", line))
-        if norm:
-            out.add(norm)
+        for unit in (piece, piece.rsplit(": ", 1)[-1]):
+            norm = normalize(_BULLET.sub("", unit))
+            if norm:
+                out.add(norm)
     return out
 
 
-def best_match(question, canvas_texts):
-    """(score, best_candidate): the best difflib ratio between the normalised question and the
-    normalised Canvas sentences and same-length token windows. 1.0 when it is a verbatim substring."""
-    q = normalize(question)
-    if not q:
-        return 0.0, ""
-    q_tokens = q.split()
-    q_set = set(q_tokens)
-    best_score, best_text = 0.0, ""
-    for text in canvas_texts:
-        t = normalize(text)
-        if not t:
+def _is_special(token):
+    """Numbers and negations must match exactly: one changed digit or a dropped "not" flips a question."""
+    return token in NEGATIONS or any(c.isdigit() for c in token)
+
+
+def token_conflict(q_tokens, c_tokens):
+    """Why a character-level near match is still a different question, or None.
+
+    Aligns the two token lists and rejects: any number or negation word that differs (added,
+    dropped or changed), and any content word the question replaced, added or left out (a
+    changed word is tolerated only when it is a spelling variant, char ratio ≥ 0.8, e.g.
+    "agent"/"agents"). Extra label words at the very start or end of the Canvas unit ("Q2", "(5
+    points)") are ignored; the whole-unit ratio already charges for them. Extra content words
+    there are not: a question that leaves off the start or end of a sentence is a fragment."""
+    ops = difflib.SequenceMatcher(None, q_tokens, c_tokens, autojunk=False).get_opcodes()
+    last = len(ops) - 1
+    for n, (tag, i1, i2, j1, j2) in enumerate(ops):
+        if tag == "equal":
             continue
-        if (" " + q + " ") in (" " + t + " "):
-            return 1.0, q
-        candidates = candidate_sentences(text)
-        tokens = t.split()
-        n = len(q_tokens)
-        for length in range(max(1, n - 2), n + 3):
-            for i in range(0, len(tokens) - length + 1):
-                window = tokens[i:i + length]
-                if len(q_set & set(window)) < 0.6 * len(q_set):
-                    continue
-                candidates.add(" ".join(window))
-        for cand in candidates:
-            sm = difflib.SequenceMatcher(None, q, cand, autojunk=False)
-            if sm.real_quick_ratio() <= best_score or sm.quick_ratio() <= best_score:
+        q_side, c_side = q_tokens[i1:i2], c_tokens[j1:j2]
+        if tag == "insert" and (n == 0 or n == last) and all(
+                t in STOPWORDS or t in LABEL_WORDS or any(c.isdigit() for c in t) for t in c_side):
+            continue
+        q_special = sorted(t for t in q_side if _is_special(t))
+        c_special = sorted(t for t in c_side if _is_special(t))
+        if q_special != c_special:
+            return "number/negation differs: %r vs %r" % (" ".join(q_side), " ".join(c_side))
+        q_content = [t for t in q_side if t not in STOPWORDS and not _is_special(t)]
+        c_content = [t for t in c_side if t not in STOPWORDS and not _is_special(t)]
+        if not q_content and not c_content:
+            continue
+        if tag == "replace" and q_content and c_content:
+            a, b = "".join(q_content), "".join(c_content)
+            if difflib.SequenceMatcher(None, a, b, autojunk=False).ratio() >= TOKEN_SIMILARITY_MIN:
                 continue
-            score = sm.ratio()
-            if score > best_score:
-                best_score, best_text = score, cand
-                if best_score >= 0.999:
-                    return 1.0, cand
-    return round(best_score, 4), best_text
+            return "word changed: %r -> %r" % (" ".join(c_side), " ".join(q_side))
+        if q_content:
+            return "word added: %r" % " ".join(q_side)
+        return "word left out: %r" % " ".join(c_side)
+    return None
+
+
+def match_question(question, canvas_texts):
+    """Score one question against the Canvas texts.
+
+    Returns {score, match, section, reason}: `score` is the best difflib ratio between the
+    normalised question and a whole Canvas unit (candidate_sentences) that passes token_conflict;
+    `section` is the index of the Canvas text it came from. Verbatim (equal after normalising, or
+    a substring covering ≥ 90% of its unit) scores 1.0. A question under MIN_MATCH_TOKENS words
+    scores 0: too short to tell a copy from a coincidence. `reason` says why a question failed."""
+    q = normalize(question)
+    q_tokens = q.split()
+    result = {"score": 0.0, "match": "", "section": None, "reason": None}
+    if not q:
+        result["reason"] = "empty question"
+        return result
+    if len(q_tokens) < MIN_MATCH_TOKENS:
+        result["reason"] = "too short to verify (fewer than %d words)" % MIN_MATCH_TOKENS
+        return result
+    best, rejected = 0.0, (0.0, None, "")
+    for idx, text in enumerate(canvas_texts):
+        for unit in candidate_sentences(text or ""):
+            if q == unit or ((" " + q + " ") in (" " + unit + " ") and len(q) >= COVERAGE_MIN * len(unit)):
+                ratio = 1.0
+            else:
+                sm = difflib.SequenceMatcher(None, q, unit, autojunk=False)
+                if sm.real_quick_ratio() <= best or sm.quick_ratio() <= best:
+                    continue
+                ratio = sm.ratio()
+                if ratio <= best:
+                    continue
+            conflict = token_conflict(q_tokens, unit.split())
+            if conflict:
+                if ratio > rejected[0]:
+                    rejected = (ratio, conflict, unit)
+                continue
+            best = ratio
+            result.update(score=round(ratio, 4), match=unit, section=idx)
+            if ratio >= 1.0:
+                result["reason"] = None
+                return result
+    if rejected[1] and rejected[0] > best:
+        result["reason"] = rejected[1]
+        if not result["match"]:
+            result["match"] = rejected[2]
+    elif best == 0.0:
+        result["reason"] = "no similar Canvas sentence"
+    return result
+
+
+def best_match(question, canvas_texts):
+    """(score, best_candidate): see match_question."""
+    m = match_question(question, canvas_texts)
+    return m["score"], m["match"]
 
 
 # --------------------------------------------------------------------------- inputs: session, canvas, readings, notes
@@ -1009,6 +1094,21 @@ def build_bundle(cfg, key, course, date, prompt, session, canvas, readings, skip
     return task, meta
 
 
+_STALE = re.compile(r"^(?:brief-reply\.\d+\.txt|brief-validation\.json|brief-output\.json)$")
+
+
+def clear_stale_outputs(work):
+    """A new bundle starts a new brief: remove the previous run's replies and validation results,
+    so `validate` numbers attempts from 1 again (and the one re-prompt is not skipped) and `format`
+    cannot pick up a brief validated against the old bundle."""
+    if not os.path.isdir(work):
+        return []
+    cleared = sorted(n for n in os.listdir(work) if _STALE.match(n))
+    for name in cleared:
+        os.remove(os.path.join(work, name))
+    return cleared
+
+
 def cmd_bundle(cfg, args, stdin=None):
     course, date = parse_key(args.key)
     cap = args.cap_chars or cfg.cap_chars
@@ -1038,6 +1138,7 @@ def cmd_bundle(cfg, args, stdin=None):
         "canvas": [dict(c, text=canvas[i]["text"].strip()) for i, c in enumerate(meta["canvas"])],
         "readings": meta["readings"], "skipped": skipped, "notes_chars": meta["notes_chars"],
     }
+    cleared = clear_stale_outputs(work)
     _write_text(task_path, task)
     _write_json(sidecar_path, sidecar)
 
@@ -1056,7 +1157,7 @@ def cmd_bundle(cfg, args, stdin=None):
         "chars": meta["chars"], "est_tokens": meta["est_tokens"], "cap_chars": cap,
         "canvas": meta["canvas"], "readings": meta["readings"], "skipped": skipped,
         "notes_chars": meta["notes_chars"], "truncated": [x["title"] for x in meta["canvas"] + meta["readings"] if x["truncated"]],
-        "warnings": warnings,
+        "cleared": cleared, "warnings": warnings,
     }
     if args.print:
         result["task"] = task
@@ -1120,14 +1221,20 @@ def cmd_validate(cfg, args, stdin=None):
     titles = [(c.get("title") or "").lower() for c in canvas_sections]
     urls = [(c.get("url") or "").lower() for c in canvas_sections if c.get("url")]
     for q in obj.get("pre_class_questions", []):
-        score, match = best_match(q["question"], canvas_texts)
+        m = match_question(q["question"], canvas_texts)
         source = (q.get("source") or "").lower()
-        source_ok = any(t and (t in source or source in t) for t in titles) or any(u and u in source for u in urls)
-        entry = {"question": q["question"], "score": score, "source": q.get("source"), "source_ok": source_ok}
-        if score >= threshold:
+        source_ok = bool(source) and (any(t and (t in source or source in t) for t in titles)
+                                      or any(u and u in source for u in urls))
+        entry = {"question": q["question"], "score": m["score"], "source": q.get("source"), "source_ok": source_ok}
+        if m["score"] >= threshold:
+            if not source_ok and m["section"] is not None:
+                # the question is real but the subagent named the wrong place: point at the section it came from
+                entry["source_original"] = q.get("source")
+                entry["source"] = canvas_sections[m["section"]].get("title") or q.get("source")
             kept.append(entry)
         else:
-            entry["best_match"] = match
+            entry["best_match"] = m["match"]
+            entry["reason"] = m["reason"] or "score %.2f below the %.2f threshold" % (m["score"], threshold)
             entry["log_line"] = "HALLUCINATION: " + one_line(q["question"], 300)
             dropped.append(entry)
 
@@ -1149,7 +1256,10 @@ def cmd_validate(cfg, args, stdin=None):
     if not 3 <= len(obj["prep_checklist"]) <= 6:
         warnings.append("prep_checklist has %d items (the prompt asks for 3-6)" % len(obj["prep_checklist"]))
     for k in kept:
-        if not k["source_ok"]:
+        if "source_original" in k:
+            warnings.append("source %r named no Canvas section; rewritten to %r" % (
+                one_line(k["source_original"] or "", 80), one_line(k["source"] or "", 80)))
+        elif not k["source_ok"]:
             warnings.append("question kept but its source %r names no Canvas section" % one_line(k["source"] or "", 80))
     validation = {"key": args.key, "attempt": attempt, "ok": True, "threshold": threshold, "kept": kept,
                   "dropped": dropped, "warnings": warnings, "checked_at": _now_iso(), "brief_path": brief_path}
@@ -1246,11 +1356,26 @@ def render_brief(course, date, record, brief, drive_links, podcast_url, podcast_
     return "\n".join(lines).rstrip() + "\n"
 
 
+def tg_len(text):
+    """Telegram counts a message's length in UTF-16 code units: an emoji outside the BMP is 2."""
+    return len(text.encode("utf-16-le")) // 2
+
+
+def _cut(line, limit):
+    """(head, rest): the longest prefix of `line` within `limit` UTF-16 units, never splitting a character."""
+    units = 0
+    for i, ch in enumerate(line):
+        units += 2 if ord(ch) > 0xFFFF else 1
+        if units > limit:
+            return line[:i], line[i:]
+    return line, ""
+
+
 def split_message(text, limit):
-    """Split at blank lines (then lines, then hard) so every part fits Telegram's limit.
-    Parts are numbered "(i/n) "; the numbering's room is reserved before splitting."""
+    """Split at blank lines (then lines, then hard) so every part fits Telegram's limit, measured in
+    UTF-16 code units. Parts are numbered "(i/n) "; the numbering's room is reserved before splitting."""
     text = text.rstrip("\n")
-    if len(text) <= limit:
+    if tg_len(text) <= limit:
         return [text]
     tag_room = 8                    # "(12/34) "
     parts = _split_parts(text, limit - tag_room)
@@ -1262,21 +1387,25 @@ def _split_parts(text, limit):
     parts, current = [], ""
     for para in text.split("\n\n"):
         candidate = para if not current else current + "\n\n" + para
-        if len(candidate) <= limit:
+        if tg_len(candidate) <= limit:
             current = candidate
             continue
         if current:
             parts.append(current)
             current = ""
-        if len(para) <= limit:
+        if tg_len(para) <= limit:
             current = para
             continue
         for line in para.split("\n"):
-            while len(line) > limit:
-                parts.append(line[:limit])
-                line = line[limit:]
+            if tg_len(line) > limit:
+                if current:         # flush what came before, so the lines stay in order
+                    parts.append(current)
+                    current = ""
+                while tg_len(line) > limit:
+                    head, line = _cut(line, limit)
+                    parts.append(head)
             candidate = line if not current else current + "\n" + line
-            if len(candidate) <= limit:
+            if tg_len(candidate) <= limit:
                 current = candidate
             else:
                 parts.append(current)
@@ -1284,6 +1413,21 @@ def _split_parts(text, limit):
     if current:
         parts.append(current)
     return parts
+
+
+def _dropped_from_validation(work):
+    """How many questions the last successful `validate` dropped, or None without a usable file."""
+    path = os.path.join(work, "brief-validation.json")
+    if not os.path.isfile(path):
+        return None
+    with open(path, encoding="utf-8") as fh:
+        try:
+            v = json.load(fh)
+        except ValueError:
+            return None
+    if not isinstance(v, dict) or v.get("ok") is not True or not isinstance(v.get("dropped"), list):
+        return None
+    return len(v["dropped"])
 
 
 def cmd_format(cfg, args, stdin=None):
@@ -1324,14 +1468,12 @@ def cmd_format(cfg, args, stdin=None):
 
     dropped = args.dropped
     if dropped is None:
+        dropped = _dropped_from_validation(work)
+    if dropped is None:
+        # no validation file (e.g. the work dir was cleaned): fall back to the record's history,
+        # which may hold one HALLUCINATION: entry for several drops, so this can undercount
         history = record.get("history") or []
         dropped = sum(1 for h in history if isinstance(h, dict) and str(h.get("action", "")).startswith("HALLUCINATION:"))
-        if not dropped and os.path.isfile(os.path.join(work, "brief-validation.json")):
-            with open(os.path.join(work, "brief-validation.json"), encoding="utf-8") as fh:
-                try:
-                    dropped = len(json.load(fh).get("dropped") or [])
-                except ValueError:
-                    dropped = 0
 
     text = render_brief(course, date, record, brief, links, podcast_url, state, dropped)
     parts = split_message(text, cfg.telegram_limit)
@@ -1344,7 +1486,7 @@ def cmd_format(cfg, args, stdin=None):
         "ok": True, "key": args.key, "text": text, "parts": parts, "paths": paths, "chars": len(text),
         "has_brief": brief is not None, "brief_source": brief_source, "questions": len((brief or {}).get("pre_class_questions") or []),
         "drive_links": links, "podcast": state, "includes_podcast": state == "ready", "dropped": dropped,
-        "send_with": ["cat %s | maritime-telegram-send -" % p for p in paths],
+        "utf16_units": tg_len(text), "send_with": ["cat %s | maritime-telegram-send -" % p for p in paths],
     }
 
 
@@ -1368,9 +1510,11 @@ def cmd_prompt(cfg, args, stdin=None):
 def cmd_score(cfg, args, stdin=None):
     threshold = cfg.threshold if args.threshold is None else args.threshold
     sections = load_canvas(cfg, args.canvas, set())
-    score, match = best_match(args.question, [s["text"] for s in sections])
-    return {"ok": True, "question": args.question, "score": score, "best_match": match,
-            "kept": score >= threshold, "threshold": threshold, "canvas_sections": len(sections)}
+    m = match_question(args.question, [s["text"] for s in sections])
+    kept = m["score"] >= threshold
+    return {"ok": True, "question": args.question, "score": m["score"], "best_match": m["match"],
+            "kept": kept, "reason": None if kept else (m["reason"] or "below the threshold"),
+            "threshold": threshold, "canvas_sections": len(sections)}
 
 
 COMMANDS = {

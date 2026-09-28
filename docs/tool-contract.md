@@ -209,7 +209,7 @@ Telegram text; the main agent still spawns the subagent itself. Work files live 
 | Command | Inputs | Output (`ok: true` plus) |
 | --- | --- | --- |
 | `bundle <key>` | `--session FILE\|-` (row or `syllabi upcoming` output), `--canvas FILE`* (`canvas assignments`/`page` JSON, `{title,url,text}`, or text; `--assignment-id ID`* filters), `--readings-json FILE` (record / `preplog get` output / list) or `--reading PATH`*, `--notes FILE\|-`, `--cap-chars N`, `--print` | `task_path` (`brief-input.md`: prompt head from `agents/brief-writer.md` + `## SESSION`, `## CANVAS TEXT` (`### CANVAS: <title> (<url>)`), `## READINGS` (`### READING: <title>`, cut ones end `[TRUNCATED: kept first N of M characters]`), `## COURSE NOTES`), `sidecar_path` (`brief-input.json`), `task_name`, `chars, est_tokens, cap_chars, canvas[], readings[], skipped[], truncated[], warnings[]` |
-| `validate <key>` | `--reply FILE\|-`, `--attempt N`, `--threshold R`, `--canvas FILE`* (override) | `attempt, brief_path` (`brief-output.json`, the cleaned brief), `reply_path`, `questions {returned, kept, dropped}`, `kept[] {question, score, source, source_ok}`, `dropped[] {question, score, best_match, log_line}`, `log_lines[]`, `warnings[]` |
+| `validate <key>` | `--reply FILE\|-`, `--attempt N`, `--threshold R`, `--canvas FILE`* (override) | `attempt, brief_path` (`brief-output.json`, the cleaned brief), `reply_path`, `questions {returned, kept, dropped}`, `kept[] {question, score, source, source_ok, source_original?}`, `dropped[] {question, score, best_match, reason, log_line}`, `log_lines[]`, `warnings[]` |
 | `format <key>` | `--record FILE\|-`, `--brief FILE`, `--drive-link URL`*, `--podcast-url URL`, `--no-podcast`, `--dropped N` | `text, parts[], paths[]` (`brief-telegram.txt`, `.2.txt`…), `send_with[]`, `has_brief, brief_source, questions, drive_links[], podcast: ready\|pending\|unavailable, includes_podcast, dropped` |
 | `format-podcast <key>` | `--url URL`, `--record FILE\|-` | `text` ("🎧 podcast ready: <link>" + course and class time), `path` |
 | `prompt` | | `prompt, source` (the blockquote under "## Prompt" in `agents/brief-writer.md`) |
@@ -221,6 +221,21 @@ Canvas text used by `validate` is the sidecar's copy, never text parsed back out
 reading with a fake `### CANVAS:` header is indented, not promoted); inputs may not come from
 `/data/secrets/` or `/data/rclone/`, readings only from `/data/readings/` or `/data/work/`; the
 cleaned brief holds only the schema's fields and only the questions that scored ≥ the threshold.
+A question is scored against whole Canvas sentences/lines (never a fragment), needs ≥ 4 words, and
+is rejected at any threshold when a number, a negation or a content word differs. Content lines
+starting with `#`, `---` or `[TRUNCATED` are indented so they cannot forge bundle structure.
+`bundle` clears the previous run's replies and validation files (`cleared[]`), so attempt
+numbering restarts at 1. Telegram length is counted in UTF-16 code units.
+
+### `pdf-text` skill
+
+`{baseDir}/scripts/pdf-text <pdf> [--json] [--out FILE]` (`workspace/skills/pdf-text/SKILL.md`):
+the text of a PDF under `/data/readings/` or `/data/work/`, via `pdftotext` → `pypdf` → the
+built-in extractor (the same chain `brief bundle` uses). Plain text on stdout by default; with
+`--json`: `{ok, path, extractor, chars, warning, text}` (`out` instead of `text` with `--out`,
+which must be under `/data/work/`). Errors are always the JSON envelope, exit 2: `USAGE` (bad
+arguments or path), `NOT_FOUND`, `NOT_PDF` (no `%PDF-` header, e.g. a saved login page). None
+retryable.
 
 | code | when | retryable | agent action |
 | --- | --- | --- | --- |
