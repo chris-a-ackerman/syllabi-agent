@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """drive: Google Drive uploads for class-prep-agent (SYL-95), via rclone.
 
-    drive.py put <local_path> <remote_dir>     (or: drive-put <local_path> <remote_dir>)
-    drive.py check                             (auth smoke test: list the Drive root, read the quota)
+    drive.py put <local_path> <remote_dir> [<remote_name>]   (or: drive-put <local_path> <remote_dir> [<remote_name>])
+    drive.py ls [<remote_dir>]                               (list a folder: rclone lsjson)
+    drive.py check                                           (auth smoke test: list the root, read the quota)
 
 Prints exactly one JSON object on stdout (docs/tool-contract.md, "Common envelope"):
 
@@ -11,31 +12,38 @@ Prints exactly one JSON object on stdout (docs/tool-contract.md, "Common envelop
     exit 1 = crash (unhandled exception; still prints an INTERNAL error object)
 
 `put` copies one local file (a downloaded reading or a podcast) to
-$DRIVE_READINGS_ROOT/<remote_dir>/<name> and returns a link to it. It is idempotent: when a file
-with the same name, size and MD5 is already there, nothing is transferred and the same link comes
-back (`uploaded: false`). It never deletes, moves or renames anything on Drive.
+$DRIVE_ROOT/<remote_dir>/<remote_name or basename> and returns {drive_path, web_url}, where
+web_url is the file's normal Drive URL (https://drive.google.com/file/d/<id>/view). Layout:
+
+    ClassPrep/Readings/<course>/<YYYY-MM-DD>/*.pdf     remote_dir = Readings/<course>/<date>
+    ClassPrep/Podcasts/<course>-<YYYY-MM-DD>.mp3       remote_dir = Podcasts
+
+It is idempotent: when a file with the same name, size and MD5 is already there, nothing is
+transferred and the same URL comes back (`uploaded: false`). It never deletes, moves or renames
+anything on Drive.
 
 Environment:
-    RCLONE_CONFIG         rclone.conf on the persistent volume (default $DATA_DIR/rclone/rclone.conf)
-    DRIVE_READINGS_ROOT   <remote>:<folder> that remote_dir is relative to (default gdrive:Readings)
-    DRIVE_SHARE           private (default): the link is the file's Drive URL, which only Chris's
-                          Google account can open, and no permission on Drive is changed.
-                          anyone: `rclone link`, i.e. "anyone with the link can view".
+    RCLONE_CONFIG         rclone.conf on the persistent volume (default $DATA_DIR/rclone/rclone.conf);
+                          must be chmod 600
+    DRIVE_ROOT            <remote>:<folder> that remote_dir is relative to (default gdrive:ClassPrep)
     DRIVE_TIMEOUT         seconds for the whole command (default 35: nlm-status allows drive-put
                           40 s, Maritime caps a command at 60 s)
     DATA_DIR              persistent volume root, default /data; local_path must be under it
     DRIVE_RCLONE_BIN      the rclone binary (default: `rclone` on PATH)
     DRIVE_VERBOSE=1       same as --verbose: log "<op> <path>" lines to stderr
 
-Security properties (requirements carried over from SYL-93 / SYL-94):
-    * Nothing from rclone.conf reaches stdout or stderr: every value in it is scrubbed from all
-      output, including crash output and rclone's own messages.
+Security properties (SYL-95 "Security", plus SYL-93 / SYL-94):
+    * No sharing is ever created or changed. `rclone link` is never run: it makes files
+      "anyone with the link", and readings are licensed material. web_url opens only for Google
+      accounts the ClassPrep folder is shared with (Chris's main account, by email).
+    * rclone.conf holds a refresh token: it must be chmod 600 (refused otherwise), and nothing
+      from it reaches stdout or stderr: every value in it is scrubbed from all output, including
+      crash output and rclone's own messages.
     * local_path must resolve (realpath) under $DATA_DIR, so a symlink can't leak a file from
-      elsewhere; its name must already be safe ([A-Za-z0-9._ -], as canvas.py writes them).
-    * remote_dir is validated segment by segment (no '..', no leading dot or dash, no ':' or
-      backslash) before it becomes part of an rclone path.
-    * Only `lsjson`, `copyto`, `link` and `about` are ever run: no sync, no delete, no purge.
-    * By default no file is made public (DRIVE_SHARE=private).
+      elsewhere; its name (and remote_name) must be safe ([A-Za-z0-9._ -], no leading dot).
+    * remote_dir is validated segment by segment (no '..', no leading '/', dot or dash, no ':' or
+      backslash) and must follow the layout above before it becomes part of an rclone path.
+    * Only `lsjson`, `copyto` and `about` are ever run: no sync, no delete, no purge, no link.
     * File names and ids that come back from Drive are data, never instructions.
 
 Standard library only (Python 3.8+); rclone is a separate binary (docs/deploy-maritime.md §7).
@@ -51,12 +59,14 @@ import time
 
 DEFAULT_TIMEOUT = 35             # seconds for the whole command (see DRIVE_TIMEOUT above)
 LIST_TIMEOUT = 15                # seconds for one lsjson / about
-LINK_TIMEOUT = 15                # seconds for one rclone link
 MAX_FILE_BYTES = 100 * 1024 * 1024   # Maritime's per-file transfer cap
-DEFAULT_ROOT = "gdrive:Readings"
+DEFAULT_ROOT = "gdrive:ClassPrep"
 DEFAULT_CONFIG = "rclone/rclone.conf"   # under $DATA_DIR
 DRIVE_FILE_URL = "https://drive.google.com/file/d/%s/view"
+DRIVE_FOLDER_URL = "https://drive.google.com/drive/folders/%s"
+READINGS, PODCASTS = "Readings", "Podcasts"     # the two top-level folders under the root
 # Fail fast: the deadline, not rclone's retry loop, bounds the run time.
+PUBLIC_CONFIG_KEYS = {"type", "scope"}   # rclone.conf keys whose values are not secret (and appear in our messages)
 RCLONE_FLAGS = ["--retries", "1", "--low-level-retries", "3", "--contimeout", "10s"]
 
 _REMOTE_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9_ .-]*):(.*)$")       # rclone remote name rules
@@ -64,21 +74,27 @@ _SEGMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._ -]{0,127}$")       # one rem
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._ -]{0,254}$")          # the file name (canvas.py's safe set)
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,256}$")                         # a Drive file id
 _TIMESTAMP_RE = re.compile(r"^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2} ")
-_HTTP_STATUS_RE = re.compile(r"\b(?:Error|status(?: code)?)[: ]+(\d{3})\b", re.I)
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+# An HTTP status only where rclone / googleapi print one ("Error 403:", "status code 503"), never
+# bare digits: course numbers and dates in paths (15.401, 15.515, 2026-09-29) are full of them.
+_HTTP_STATUS_RE = re.compile(r"\b(?:Error|status(?: code)?|HTTP/\d(?:\.\d)?)[: ]+([1-5]\d\d)\b", re.I)
 
-# rclone / Google API error text → tool codes. Checked in this order.
+# rclone / Google API error text → tool codes. classify() checks them in this order:
+# definite auth failures, then network, then anything else that mentions OAuth, then quota.
 _AUTH_RE = re.compile(
-    r"invalid_grant|token has been expired|expired or revoked|oauth2|cannot fetch token|couldn't fetch token|"
-    r"unauthori[sz]ed|invalid credentials|invalid_client|unauthenticated|autherror|"
-    r"insufficient ?permissions|didn't find section in config|config file .*not found|couldn't find config|"
-    r"failed to read config|failed to create file system|no such remote|empty token found|token expired|"
-    r"\b401\b", re.I)
+    r"invalid_grant|token has been expired|expired or revoked|invalid credentials|invalid_client|"
+    r"unauthenticated|autherror|didn't find section in config|config file .*not found|couldn't find config|"
+    r"failed to read config|no such remote|empty token found|token expired", re.I)
+# drive.file scope: the agent may only touch files and folders its own account created.
+_FILE_PERMISSION_RE = re.compile(r"insufficient\w*permissions|appNotAuthorizedToFile", re.I)
+_OAUTH_RE = re.compile(r"oauth|cannot fetch token|couldn't fetch token|unauthori[sz]ed|failed to create file system",
+                       re.I)
 _QUOTA_RE = re.compile(
     r"storageQuotaExceeded|quotaExceeded|quota exceeded|teamDriveFileLimitExceeded|userRateLimitExceeded|"
-    r"rateLimitExceeded|dailyLimitExceeded|too many requests|\b429\b|insufficient storage|storage quota", re.I)
+    r"rateLimitExceeded|dailyLimitExceeded|too many requests|insufficient storage|storage quota", re.I)
 _NETWORK_RE = re.compile(
     r"dial tcp|no such host|connection (?:refused|reset)|timed? ?out|i/o timeout|tls handshake|unexpected eof|"
-    r"network is unreachable|temporary failure|\b5\d\d\b|internal error|backend error|service unavailable|"
+    r"network is unreachable|temporary failure|internal error|backend error|service unavailable|"
     r"context deadline|broken pipe", re.I)
 _NOT_FOUND_RE = re.compile(r"(?:directory|file|object) not found", re.I)
 
@@ -118,19 +134,16 @@ class Config:
     def __init__(self, env, verbose=False):
         self.data_dir = os.path.realpath(env.get("DATA_DIR") or "/data")
         self.config_path = env.get("RCLONE_CONFIG") or os.path.join(self.data_dir, DEFAULT_CONFIG)
-        root = (env.get("DRIVE_READINGS_ROOT") or DEFAULT_ROOT).strip()
+        root = (env.get("DRIVE_ROOT") or DEFAULT_ROOT).strip()
         m = _REMOTE_RE.match(root)
         if not m:
-            raise DriveError("USAGE", "DRIVE_READINGS_ROOT must be <remote>:<folder>, e.g. gdrive:Readings",
+            raise DriveError("USAGE", "DRIVE_ROOT must be <remote>:<folder>, e.g. gdrive:ClassPrep",
                              detail={"root": root})
         self.remote = m.group(1)
         self.root_path = m.group(2).strip().strip("/")
         for segment in self.root_path.split("/") if self.root_path else []:
             if not _SEGMENT_RE.match(segment):
-                raise DriveError("USAGE", "DRIVE_READINGS_ROOT has an unsafe folder segment", detail={"segment": segment})
-        self.share = (env.get("DRIVE_SHARE") or "private").strip().lower()
-        if self.share not in ("private", "anyone"):
-            raise DriveError("USAGE", "DRIVE_SHARE must be 'private' (default) or 'anyone'")
+                raise DriveError("USAGE", "DRIVE_ROOT has an unsafe folder segment", detail={"segment": segment})
         try:
             self.timeout = float(env.get("DRIVE_TIMEOUT") or DEFAULT_TIMEOUT)
         except ValueError:
@@ -153,7 +166,7 @@ class Config:
         return "%s:%s" % (self.remote, self.display_path(*parts))
 
     def display_path(self, *parts):
-        """'<root>/<parts...>' without the remote name: what goes in the prep-log and the brief."""
+        """'<root>/<parts...>' without the remote name: drive_path, what goes in the prep-log."""
         return "/".join(p for p in (self.root_path,) + tuple(parts) if p)
 
     def log(self, message):
@@ -177,7 +190,9 @@ def load_config_secrets(path):
         line = line.strip()
         if not line or line[0] in "#;[" or "=" not in line:
             continue
-        value = line.split("=", 1)[1].strip()
+        key, value = (part.strip() for part in line.split("=", 1))
+        if key.lower() in PUBLIC_CONFIG_KEYS:
+            continue
         if len(value) >= 8:
             values.add(value)
         if value.startswith("{"):           # token = {"access_token": "...", "refresh_token": "..."}
@@ -221,22 +236,67 @@ def check_local_path(cfg, path):
     return real, name, size
 
 
-def check_remote_dir(cfg, remote_dir):
-    """remote_dir is '<course>/<date>' relative to the root. 'Readings/<course>/<date>' (the root
-    folder spelled out, as AGENTS.md's Drive layout does) is accepted and means the same folder."""
-    raw = (remote_dir or "").strip().strip("/")
+def check_config_file(cfg):
+    """rclone.conf must exist and be private (chmod 600): it holds the Drive refresh token."""
+    try:
+        mode = os.stat(cfg.config_path).st_mode
+    except OSError:
+        mode = None
+    if mode is None or not os.path.isfile(cfg.config_path):
+        raise DriveError("DRIVE_AUTH", "no rclone config at %s: authorize the agent's Google account on your laptop "
+                         "(`rclone authorize \"drive\"`), write the conf there with scope = drive.file, then "
+                         "chmod 600 it (docs/deploy-maritime.md §7)" % cfg.config_path)
+    if mode & 0o077:
+        raise DriveError("DRIVE_AUTH", "%s is readable by other users (mode %03o); it holds a refresh token. "
+                         "Run `chmod 600 %s` and try again" % (cfg.config_path, mode & 0o777, cfg.config_path),
+                         detail={"mode": "%03o" % (mode & 0o777)})
+
+
+_LAYOUT_HINT = "use Readings/<course>/<YYYY-MM-DD> for readings or Podcasts for podcasts, relative to %s"
+
+
+def check_remote_dir(cfg, remote_dir, for_put=True):
+    """remote_dir is relative to the root (ClassPrep). `put` takes 'Readings/<course>/<date>' or
+    'Podcasts' (the layout in SYL-95); `ls` takes any folder under Readings or Podcasts, or ''
+    (the root). The root folder spelled out ('ClassPrep/Readings/...') means the same folder."""
+    raw = (remote_dir or "").strip()
+    if raw.startswith("/"):
+        raise DriveError("USAGE", "remote_dir must be relative (no leading '/'): " + _LAYOUT_HINT % cfg.root_display,
+                         detail={"remote_dir": remote_dir})
+    raw = raw.strip("/")
     if cfg.root_path and (raw == cfg.root_path or raw.startswith(cfg.root_path + "/")):
         raw = raw[len(cfg.root_path):].strip("/")
-    if not raw:
-        raise DriveError("USAGE", "remote_dir must be like <course>/<date>, relative to %s" % cfg.root_display,
-                         detail={"remote_dir": remote_dir})
     if ":" in raw or "\\" in raw:
         raise DriveError("USAGE", "remote_dir must not contain ':' or '\\'", detail={"remote_dir": remote_dir})
-    for segment in raw.split("/"):
+    segments = raw.split("/") if raw else []
+    for segment in segments:
         if not _SEGMENT_RE.match(segment):
             raise DriveError("USAGE", "remote_dir has an unsafe segment (use letters, digits, . _ - and spaces; "
                              "no leading dot or dash)", detail={"segment": segment})
+    if not segments:
+        if for_put:
+            raise DriveError("USAGE", "remote_dir is required: " + _LAYOUT_HINT % cfg.root_display,
+                             detail={"remote_dir": remote_dir})
+        return raw
+    top = segments[0]
+    if top not in (READINGS, PODCASTS):
+        raise DriveError("USAGE", "remote_dir must start with Readings/ or Podcasts: " + _LAYOUT_HINT % cfg.root_display,
+                         detail={"remote_dir": remote_dir})
+    if for_put:
+        if top == PODCASTS and len(segments) != 1:
+            raise DriveError("USAGE", "podcasts go straight into Podcasts/ (name the file <course>-<date>.mp3)",
+                             detail={"remote_dir": remote_dir})
+        if top == READINGS and (len(segments) != 3 or not _DATE_RE.match(segments[2])):
+            raise DriveError("USAGE", "readings go into Readings/<course>/<YYYY-MM-DD>", detail={"remote_dir": remote_dir})
     return raw
+
+
+def check_remote_name(name):
+    """The optional file name on Drive (e.g. a podcast's <course>-<date>.mp3): same rules as local."""
+    if not _NAME_RE.match(name or "") or name in (".", ".."):
+        raise DriveError("USAGE", "remote_name must use [A-Za-z0-9._ -] and not start with a dot or dash",
+                         detail={"remote_name": name})
+    return name
 
 
 def _md5_file(path):
@@ -260,10 +320,10 @@ def _run_rclone(cfg, args, timeout):
         raise DriveError("DRIVE_NOT_INSTALLED", "rclone is not installed (looked for %r); see docs/deploy-maritime.md §7"
                          % cfg.rclone)
     except subprocess.TimeoutExpired:
-        raise DriveError("DRIVE_UNAVAILABLE", "rclone %s did not finish within %.0f s; for a big file run drive-put in "
+        raise DriveError("DRIVE_NET", "rclone %s did not finish within %.0f s; for a big file run drive-put in "
                          "the background with DRIVE_TIMEOUT=300" % (args[0], timeout), retryable=True)
     except OSError as e:
-        raise DriveError("DRIVE_UNAVAILABLE", "could not run rclone: %s" % _short(e), retryable=True)
+        raise DriveError("DRIVE_NET", "could not run rclone: %s" % _short(e), retryable=True)
     return proc.returncode, proc.stdout or "", proc.stderr or ""
 
 
@@ -274,7 +334,7 @@ def rclone(cfg, args, cap, what):
     """Run one rclone subcommand inside what is left of the command deadline."""
     remaining = cfg.remaining()
     if remaining < 1:
-        raise DriveError("DRIVE_UNAVAILABLE", "out of time before %s (DRIVE_TIMEOUT=%.0f s)" % (what, cfg.timeout),
+        raise DriveError("DRIVE_NET", "out of time before %s (DRIVE_TIMEOUT=%.0f s)" % (what, cfg.timeout),
                          retryable=True)
     cfg.log(what)
     return run_rclone(cfg, list(args), min(cap, remaining))
@@ -298,23 +358,39 @@ def is_not_found(rc, err):
 
 
 def classify(cfg, rc, err, what):
-    """Map a failed rclone run to a DriveError (docs/tool-contract.md §4)."""
+    """Map a failed rclone run to a DriveError (docs/tool-contract.md §4).
+
+    Order matters. A definite auth failure (invalid_grant, 401, ...) wins over everything, so a
+    path full of digits can never turn it into a retryable network error. Network next: a token
+    refresh that times out mentions oauth2 but is not an auth failure. Any other failure that
+    mentions OAuth is DRIVE_AUTH (SYL-95: rclone exit code + "oauth" in stderr). Everything else
+    is DRIVE_NET."""
+    err = err or ""
     summary = _stderr_summary(err)
-    m = _HTTP_STATUS_RE.search(err or "")
+    m = _HTTP_STATUS_RE.search(err)
     status = int(m.group(1)) if m else None
-    # Network first: a token refresh that times out mentions oauth2 but is not an auth failure.
-    if rc == 5 or _NETWORK_RE.search(err or ""):
-        return DriveError("DRIVE_UNAVAILABLE", "%s: network or Drive error (%s)" % (what, summary or "rclone exit %d" % rc),
-                          retryable=True, status=status)
-    if _AUTH_RE.search(err or ""):
-        return DriveError("DRIVE_AUTH", "%s: rclone could not use the Drive remote (%s). Reconnect it on your laptop "
-                          "(`rclone config reconnect %s:`) and upload the new rclone.conf to %s"
-                          % (what, summary or "no detail", cfg.remote, cfg.config_path), retryable=False, status=status)
-    if _QUOTA_RE.search(err or ""):
+    reconnect = ("Re-authorize the agent's Google account on your laptop (`rclone authorize \"drive\"`), put the new "
+                 "token in %s (scope = drive.file, chmod 600)" % cfg.config_path)
+    if status == 401 or _AUTH_RE.search(err):
+        return DriveError("DRIVE_AUTH", "%s: rclone could not use the Drive remote %s: (%s). %s"
+                          % (what, cfg.remote, summary or "no detail", reconnect), retryable=False, status=status)
+    if _FILE_PERMISSION_RE.search(err):
+        return DriveError("DRIVE_AUTH", "%s: Drive refused access (%s). With scope = drive.file the agent can only "
+                          "touch files and folders its own account created: let the agent create %s itself (don't "
+                          "make it by hand or move it in), or re-authorize: %s"
+                          % (what, summary or "no detail", cfg.root_display, reconnect), retryable=False,
+                          status=status, detail={"reason": "insufficientFilePermissions"})
+    if status == 429 or _QUOTA_RE.search(err):
         return DriveError("DRIVE_QUOTA", "%s: Drive quota or rate limit hit (%s); try again on the next run"
                           % (what, summary), retryable=True, status=status)
+    if rc == 5 or (status is not None and status >= 500) or _NETWORK_RE.search(err):
+        return DriveError("DRIVE_NET", "%s: network or Drive error (%s)" % (what, summary or "rclone exit %d" % rc),
+                          retryable=True, status=status)
+    if _OAUTH_RE.search(err):
+        return DriveError("DRIVE_AUTH", "%s: rclone could not get a Drive token (%s). %s"
+                          % (what, summary or "no detail", reconnect), retryable=False, status=status)
     # 1 = usage (our bug or an unknown flag), 7 = fatal (retries won't help); anything else may pass next time.
-    return DriveError("DRIVE_UNAVAILABLE", "%s: rclone exit %d (%s)" % (what, rc, summary or "no output"),
+    return DriveError("DRIVE_NET", "%s: rclone exit %d (%s)" % (what, rc, summary or "no output"),
                       retryable=rc not in (1, 7), status=status)
 
 
@@ -333,10 +409,10 @@ def list_remote_dir(cfg, remote_dir):
     try:
         entries = json.loads(out or "[]")
     except ValueError:
-        raise DriveError("DRIVE_UNAVAILABLE", "rclone lsjson printed something that is not JSON for %s" % display,
+        raise DriveError("DRIVE_NET", "rclone lsjson printed something that is not JSON for %s" % display,
                          retryable=True)
     if not isinstance(entries, list):
-        raise DriveError("DRIVE_UNAVAILABLE", "rclone lsjson printed no list for %s" % display, retryable=True)
+        raise DriveError("DRIVE_NET", "rclone lsjson printed no list for %s" % display, retryable=True)
     return [e for e in entries if isinstance(e, dict) and not e.get("IsDir")]
 
 
@@ -375,31 +451,23 @@ def same_file(entry, size, md5):
     return remote_md5 is None or remote_md5 == md5
 
 
-def share_link(cfg, entry, remote_dir, name):
-    """(link, mode). private: the file's Drive URL, no permission change. anyone: rclone link."""
-    display = cfg.display_path(remote_dir, name)
-    if cfg.share == "private":
-        fid = _file_id(entry)
-        if not fid:
-            raise DriveError("USAGE", "Drive returned no file id for %s (not a Google Drive remote?); set "
-                             "DRIVE_SHARE=anyone to use `rclone link` instead" % display)
-        return DRIVE_FILE_URL % fid, "private"
-    rc, out, err = rclone(cfg, ["link", cfg.remote_path(remote_dir, name)], LINK_TIMEOUT, "link %s" % display)
-    if rc != 0:
-        raise classify(cfg, rc, err, "creating a share link for %s" % display)
-    lines = [line.strip() for line in out.splitlines() if line.strip()]
-    link = lines[-1] if lines else ""
-    if not link.startswith(("https://", "http://")):
-        raise DriveError("DRIVE_UNAVAILABLE", "rclone link printed no URL for %s" % display, retryable=True)
-    return link, "anyone"
+def web_url(cfg, entry, display):
+    """The file's normal Drive URL, https://drive.google.com/file/d/<id>/view. It changes no
+    permission: it opens only for accounts the ClassPrep folder is shared with. (Never `rclone
+    link`: that makes the file "anyone with the link", and readings are licensed.)"""
+    fid = _file_id(entry)
+    if not fid:
+        raise DriveError("DRIVE_NET", "Drive listed %s without a usable file id; try again" % display, retryable=True)
+    return DRIVE_FILE_URL % fid
 
 
 # --------------------------------------------------------------------------- commands
 
 
 def cmd_put(cfg, args):
-    local, name, size = check_local_path(cfg, args.local_path)
+    local, local_name, size = check_local_path(cfg, args.local_path)
     remote_dir = check_remote_dir(cfg, args.remote_dir)
+    name = check_remote_name(args.remote_name) if args.remote_name else local_name
     md5 = _md5_file(local)
     display = cfg.display_path(remote_dir, name)
 
@@ -416,18 +484,51 @@ def cmd_put(cfg, args):
         uploaded = True
         existing = find_remote_file(list_remote_dir(cfg, remote_dir), name, md5)
         if existing is None:
-            raise DriveError("DRIVE_UNAVAILABLE", "upload of %s reported success but the file is not listed" % display,
+            raise DriveError("DRIVE_NET", "upload of %s reported success but the file is not listed" % display,
                              retryable=True)
         if existing.get("Size") != size:
-            raise DriveError("DRIVE_UNAVAILABLE", "size mismatch after uploading %s (%s bytes on Drive, %d local)"
+            raise DriveError("DRIVE_NET", "size mismatch after uploading %s (%s bytes on Drive, %d local)"
                              % (display, existing.get("Size"), size), retryable=True)
         remote_md5 = _md5_of(existing)
         if remote_md5 and remote_md5 != md5:
-            raise DriveError("DRIVE_UNAVAILABLE", "hash mismatch after uploading %s" % display, retryable=True)
+            raise DriveError("DRIVE_NET", "hash mismatch after uploading %s" % display, retryable=True)
 
-    link, mode = share_link(cfg, existing, remote_dir, name)
-    return {"ok": True, "remote_path": display, "share_link": link, "uploaded": uploaded, "bytes": size,
-            "md5": md5, "file_id": _file_id(existing), "share": mode, "local_path": local}
+    url = web_url(cfg, existing, display)
+    # remote_path / share_link are the pre-SYL-95-review names, kept as aliases until nlm (#3) moves over.
+    return {"ok": True, "drive_path": display, "web_url": url, "uploaded": uploaded, "bytes": size, "md5": md5,
+            "file_id": _file_id(existing), "local_path": local, "remote_path": display, "share_link": url}
+
+
+def cmd_ls(cfg, args):
+    remote_dir = check_remote_dir(cfg, args.remote_dir, for_put=False)
+    display = cfg.display_path(remote_dir)
+    rc, out, err = rclone(cfg, ["lsjson", "--no-modtime", cfg.remote_path(remote_dir)], LIST_TIMEOUT,
+                          "lsjson %s" % display)
+    if rc != 0:
+        if is_not_found(rc, err):
+            return {"ok": True, "drive_path": display, "exists": False, "entries": []}
+        raise classify(cfg, rc, err, "listing %s" % display)
+    try:
+        listed = json.loads(out or "[]")
+    except ValueError:
+        raise DriveError("DRIVE_NET", "rclone lsjson printed something that is not JSON for %s" % display,
+                         retryable=True)
+    if not isinstance(listed, list):
+        raise DriveError("DRIVE_NET", "rclone lsjson printed no list for %s" % display, retryable=True)
+    entries = []
+    for e in listed:
+        if not isinstance(e, dict) or not isinstance(e.get("Name"), str):
+            continue
+        is_dir = bool(e.get("IsDir"))
+        fid = _file_id(e)
+        entry = {"name": e["Name"], "is_dir": is_dir, "drive_path": cfg.display_path(remote_dir, e["Name"]),
+                 "file_id": fid, "web_url": (DRIVE_FOLDER_URL if is_dir else DRIVE_FILE_URL) % fid if fid else None}
+        if not is_dir and isinstance(e.get("Size"), int):
+            entry["bytes"] = e["Size"]
+        if isinstance(e.get("MimeType"), str):
+            entry["mime_type"] = e["MimeType"]
+        entries.append(entry)
+    return {"ok": True, "drive_path": display, "exists": True, "entries": entries}
 
 
 def cmd_check(cfg, args):
@@ -438,14 +539,14 @@ def cmd_check(cfg, args):
         try:
             listed = json.loads(out or "[]")
         except ValueError:
-            raise DriveError("DRIVE_UNAVAILABLE", "rclone lsjson printed something that is not JSON", retryable=True)
+            raise DriveError("DRIVE_NET", "rclone lsjson printed something that is not JSON", retryable=True)
         entries = len(listed) if isinstance(listed, list) else None
     elif is_not_found(rc, err):
         root_exists = False          # the first upload creates it
     else:
         raise classify(cfg, rc, err, "listing %s" % cfg.root_display)
     result = {"ok": True, "root": cfg.root_display, "root_exists": root_exists, "entries": entries,
-              "config_path": cfg.config_path, "share": cfg.share}
+              "config_path": cfg.config_path}
     rc, out, err = rclone(cfg, ["about", "--json", cfg.remote + ":"], LIST_TIMEOUT, "about %s:" % cfg.remote)
     if rc == 0:                      # quota is a nicety: a backend without `about` still passes the check
         try:
@@ -458,7 +559,7 @@ def cmd_check(cfg, args):
     return result
 
 
-COMMANDS = {"put": cmd_put, "check": cmd_check}
+COMMANDS = {"put": cmd_put, "ls": cmd_ls, "check": cmd_check}
 # When invoked through the drive-put symlink the subcommand is implied by argv[0].
 IMPLIED = {"drive-put": "put", "drive-check": "check"}
 
@@ -476,9 +577,13 @@ def build_parser(prog="drive"):
     p.add_argument("-v", "--verbose", action="store_true", help="log '<op> <path>' lines to stderr (never the config)")
     sub = p.add_subparsers(dest="command", metavar="<command>")
 
-    s = sub.add_parser("put", help="upload one file under $DATA_DIR to <root>/<remote_dir>/ and return its link")
+    s = sub.add_parser("put", help="upload one file under $DATA_DIR to <root>/<remote_dir>/ and return its web_url")
     s.add_argument("local_path")
-    s.add_argument("remote_dir", help="e.g. MAS.665/2026-09-29 (relative to $DRIVE_READINGS_ROOT)")
+    s.add_argument("remote_dir", help="Readings/<course>/<YYYY-MM-DD> or Podcasts (relative to $DRIVE_ROOT)")
+    s.add_argument("remote_name", nargs="?", help="file name on Drive (default: the local basename)")
+
+    s = sub.add_parser("ls", help="list a folder under the root (rclone lsjson)")
+    s.add_argument("remote_dir", nargs="?", default="", help="e.g. Readings/MAS.665 (default: the root)")
 
     sub.add_parser("check", help="auth smoke test: list the Drive root and read the quota")
     return p
@@ -540,9 +645,7 @@ def main(argv=None, env=None, out=None, prog=None):
         if not args.command:
             raise DriveError("USAGE", "missing command: one of %s" % ", ".join(COMMANDS))
         cfg = Config(env, verbose=args.verbose)
-        if not os.path.isfile(cfg.config_path):
-            raise DriveError("DRIVE_AUTH", "no rclone config at %s: run `rclone config` on your laptop (Google Drive "
-                             "remote, OAuth) and upload the resulting rclone.conf there" % cfg.config_path)
+        check_config_file(cfg)
         result = COMMANDS[args.command](cfg, args)
         _emit(out, result, secrets)
         return 0
