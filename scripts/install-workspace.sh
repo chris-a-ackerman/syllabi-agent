@@ -12,12 +12,16 @@
 #     (memory-templates, not memory: OpenClaw uses workspace/memory/ for its own daily notes.)
 #   - SOUL.md is copied over OpenClaw's default.
 #   - Runtime dirs under /data are created, and course-notes / prep-log are seeded if missing.
+#
+# REPO, WS and DATA_DIR can be overridden in the environment. On Maritime leave them alone;
+# tests/test_instructions.py sets all three to temp dirs to check the merge.
 set -eu
 
 REPO="${REPO:-/data/syllabi-agent}"
 WS="${WS:-/data/.openclaw/workspace}"
+DATA_DIR="${DATA_DIR:-/data}"
 SRC="$REPO/workspace"
-BACKUP="/data/workspace-backups/$(date -u +%Y%m%dT%H%M%SZ)"
+BACKUP="$DATA_DIR/workspace-backups/$(date -u +%Y%m%dT%H%M%SZ)"
 
 [ -d "$WS" ]  || { echo "error: no OpenClaw workspace at $WS" >&2; exit 1; }
 [ -d "$SRC" ] || { echo "error: no repo workspace at $SRC (clone the repo first)" >&2; exit 1; }
@@ -43,9 +47,10 @@ cat "$SRC/AGENTS.md" >> "$WS/AGENTS.md.new"
 mv "$WS/AGENTS.md.new" "$WS/AGENTS.md"
 
 # 4. Runtime directories and seed files (never overwritten).
-mkdir -p /data/memory /data/logs /data/readings /data/podcasts /data/work /data/secrets /data/rclone
-[ -f /data/memory/course-notes.md ] || cp "$SRC/memory-templates/course-notes.md" /data/memory/course-notes.md
-[ -f /data/memory/prep-log.json ]   || printf '{"version": 1, "sessions": {}}\n' > /data/memory/prep-log.json
+mkdir -p "$DATA_DIR/memory" "$DATA_DIR/logs" "$DATA_DIR/readings" "$DATA_DIR/podcasts" \
+         "$DATA_DIR/work" "$DATA_DIR/secrets" "$DATA_DIR/rclone"
+[ -f "$DATA_DIR/memory/course-notes.md" ] || cp "$SRC/memory-templates/course-notes.md" "$DATA_DIR/memory/course-notes.md"
+[ -f "$DATA_DIR/memory/prep-log.json" ]   || printf '{"version": 1, "sessions": {}}\n' > "$DATA_DIR/memory/prep-log.json"
 
 echo "installed $SRC into $WS (backup: $BACKUP)"
 ls -la "$WS"
