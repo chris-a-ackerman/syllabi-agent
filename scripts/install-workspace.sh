@@ -13,13 +13,13 @@
 #   - SOUL.md is copied over OpenClaw's default.
 #   - Runtime dirs under /data are created, and course-notes / prep-log are seeded if missing.
 #
-# REPO, WS and DATA_DIR can be overridden in the environment. On Maritime leave them alone;
-# tests/test_instructions.py sets all three to temp dirs to check the merge.
+# DATA_DIR, REPO and WS can be overridden in the environment; REPO and WS default to paths under
+# DATA_DIR. On Maritime leave them alone; tests/test_instructions.py points them at temp dirs.
 set -eu
 
-REPO="${REPO:-/data/syllabi-agent}"
-WS="${WS:-/data/.openclaw/workspace}"
 DATA_DIR="${DATA_DIR:-/data}"
+REPO="${REPO:-$DATA_DIR/syllabi-agent}"
+WS="${WS:-$DATA_DIR/.openclaw/workspace}"
 SRC="$REPO/workspace"
 BACKUP="$DATA_DIR/workspace-backups/$(date -u +%Y%m%dT%H%M%SZ)"
 
