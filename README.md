@@ -35,7 +35,7 @@ were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritim
 │   │   ├── canvas/SKILL.md       ← Canvas LMS reads (stub)
 │   │   ├── nlm/SKILL.md          ← nlm-prep / nlm-status for NotebookLM (stub)
 │   │   └── drive/
-│   │       ├── SKILL.md          ← Google Drive uploads: put / check, errors, agent rules
+│   │       ├── SKILL.md          ← Google Drive uploads: put / ls / check, errors, agent rules
 │   │       └── scripts/drive.py  ← the CLI over rclone; drive-put is a symlink to it
 │   └── memory-templates/
 │       ├── prep-log.schema.json  ← JSON Schema for /data/memory/prep-log.json
@@ -127,13 +127,16 @@ Full contracts in [`docs/tool-contract.md`](docs/tool-contract.md).
   **`nlm-status <notebook_id>`** returns `{status: pending|ready|failed, audio_url?}`. When the
   audio is ready, it downloads the mp3 to `/data/podcasts/` and pushes it to Drive.
   Cookies are at `/data/secrets/notebooklm-cookies.json`. Auth failure returns error code `NLM_AUTH`.
-- **`drive-put <local_path> <remote_dir>`** (`workspace/skills/drive/scripts/drive.py put`) copies
-  one file under `/data/` to `Readings/<course>/<date>/` with rclone and returns
-  `{remote_path, share_link, uploaded}`. Idempotent: a file already there with the same size and
-  MD5 is not sent again and gets the same link. The link is private by default
-  (`DRIVE_SHARE=anyone` makes it "anyone with the link"). Config is at `/data/rclone/rclone.conf`;
-  its values are scrubbed from every output line. Auth failure returns error code `DRIVE_AUTH`.
-  `drive.py check` is the config smoke test.
+- **`drive-put <local_path> <remote_dir> [<remote_name>]`** (`workspace/skills/drive/scripts/drive.py put`)
+  copies one file under `/data/` to `ClassPrep/Readings/<course>/<date>/` (or
+  `ClassPrep/Podcasts/<course>-<date>.mp3`) with rclone and returns `{drive_path, web_url, uploaded}`,
+  where `web_url` is the file's normal Drive URL. It never creates link sharing (`rclone link` is
+  never run): the files open only for the account `ClassPrep` is shared with. Idempotent: a file
+  already there with the same size and MD5 is not sent again and gets the same URL. rclone runs as
+  a dedicated agent Google account with `scope = drive.file`; the config at
+  `/data/rclone/rclone.conf` must be `chmod 600` and its values are scrubbed from every output line.
+  Errors: `DRIVE_AUTH` (token or permissions), `DRIVE_NET` (network, retryable). `drive.py ls`
+  lists a folder; `drive.py check` is the config smoke test.
 - **Telegram** (Maritime channel) for briefs and questions, sent with `maritime-telegram-send`.
 
 ### Memory (rubric 2): read at the start of every run, written at the end

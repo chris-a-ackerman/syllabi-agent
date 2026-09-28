@@ -111,17 +111,40 @@ Expected: `[]`. To undo: `cp /data/openclaw.json.pre-subagent ~/.openclaw/opencl
   ```
   Run: python3 /data/syllabi-agent/workspace/skills/drive/scripts/drive.py check
   ```
-  `check` must print `{"ok": true, "root": "gdrive:Readings", ...}`. `DRIVE_AUTH` means the
-  config file is missing or its token is stale; `DRIVE_NOT_INSTALLED` means rclone was not found.
-  Then one real upload, twice:
-  `Run: /data/syllabi-agent/workspace/skills/drive/scripts/drive-put /data/readings/MAS.665/<date>/<file>.pdf MAS.665/<date>`.
-  The first run says `uploaded: true`; open its `share_link` on the iPad (signed in to Google);
-  the second run must say `uploaded: false` with the same link and transfer nothing. Restart the
-  agent and re-run `check` to confirm the install survived.
+  `check` must print `{"ok": true, "root": "gdrive:ClassPrep", ...}`. `DRIVE_AUTH` means the
+  config file is missing, not `chmod 600`, or its token is stale; `DRIVE_NOT_INSTALLED` means
+  rclone was not found. Then one real upload, twice:
+  `Run: /data/syllabi-agent/workspace/skills/drive/scripts/drive-put /data/readings/MAS.665/<date>/<file>.pdf Readings/MAS.665/<date>`.
+  The first run says `uploaded: true`; open its `web_url` on the iPad; the second run must say
+  `uploaded: false` with the same URL and transfer nothing. Restart the agent and re-run `check`
+  to confirm the install survived.
 - Upload secrets to `/data/secrets/` and `/data/rclone/`, and set the environment variables with
-  `maritime env set` (see `.env.example`). The rclone config is made on the laptop:
-  `rclone config` → new remote `gdrive`, storage `drive`, scope `drive`, default client id, OAuth
-  in the browser; then upload `~/.config/rclone/rclone.conf` to `/data/rclone/rclone.conf`.
+  `maritime env set` (see `.env.example`).
+- **Drive identity and rclone config (SYL-95 Security).** rclone runs as the **dedicated agent
+  Google account** (the one from V3), never Chris's main account, with `scope = drive.file`, so
+  the agent can only see and change files it created itself. The container has no browser, so:
+  1. On the laptop, signed in to the agent account in the browser: `rclone authorize "drive"`.
+     It prints a token JSON.
+  2. Write `/data/rclone/rclone.conf` (do not commit it, do not paste it into chat or logs):
+     ```
+     [gdrive]
+     type = drive
+     scope = drive.file
+     token = {"access_token":"…","token_type":"Bearer","refresh_token":"…","expiry":"…"}
+     ```
+  3. `Run: chmod 600 /data/rclone/rclone.conf`. The drive skill refuses to run (`DRIVE_AUTH`,
+     "chmod 600") while the file is readable by group or others: it holds a refresh token.
+  4. Let the agent create the folder: the first `drive-put` makes `ClassPrep/` (with `drive.file`,
+     a folder you make by hand is invisible to the agent and uploads into it fail with
+     `DRIVE_AUTH` / `insufficientFilePermissions`).
+  5. From the **agent account** in drive.google.com, share `ClassPrep` with Chris's main account
+     by email (Viewer or Editor), **not** "anyone with the link". It shows up under *Shared with
+     me* in the iPad Files app and in Goodnotes' "Import from Google Drive"; `web_url` links open
+     on the phone because it is signed in to the main account.
+  Layout: `ClassPrep/Readings/<course>/<YYYY-MM-DD>/*.pdf` and
+  `ClassPrep/Podcasts/<course>-<YYYY-MM-DD>.mp3`. The skill never runs `rclone link`, so no file is
+  ever reachable without a Google login. Fallback if Drive is down: send PDFs as Telegram
+  attachments (100 MB cap).
 
 ---
 
