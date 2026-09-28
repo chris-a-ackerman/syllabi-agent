@@ -30,9 +30,12 @@ Rules for every tool:
 - It never prints tokens, cookies or config contents, including in `message`.
 - Write operations (download, upload) are idempotent: rerunning one returns the same result
   and does not duplicate the work.
-- A timeout counts as an error (`*_UNAVAILABLE`, `retryable: true`), never a hang. Each call must
-  finish well within the 30-second reply budget. The only long job (audio generation) runs
-  asynchronously.
+- A timeout counts as a retryable network error, never a hang: `CANVAS_NET` for canvas; other
+  tools use the network code in their own table below. Every API call has a 20 s timeout, inside
+  the 30-second reply budget. File transfers are capped by Maritime's 60 s per-command exec limit:
+  `canvas download` has a 50 s **total** deadline (all redirect hops plus the body), not a
+  per-socket timeout, and returns `CANVAS_NET` (`retryable: true`) when it runs out. The only long
+  job (audio generation) runs asynchronously.
 
 ---
 
@@ -78,28 +81,42 @@ in its log and prep-log.)
 
 ## 2. `canvas` skill (read-only)
 
-Implemented as `{baseDir}/scripts/canvas <op> …`, or as the equivalent tools from
-`vishalsachdev/canvas-mcp` mounted as an MCP server. Either way, the ops, outputs and error codes
-are the ones below.
+Implemented as `workspace/skills/canvas/scripts/canvas.py` (SYL-93; `scripts/canvas` is a symlink
+to it), a standard-library Python CLI over the Canvas REST API: base `$CANVAS_BASE_URL/api/v1`,
+header `Authorization: Bearer $CANVAS_TOKEN` (`CANVAS_API_TOKEN` is an alias), `per_page=100`,
+every `Link: rel="next"` page followed. `canvas-mcp` was not used: whether the OpenClaw template
+can host a Python MCP server is unverified, and these are six GET endpoints.
 
-| Op | Inputs | Output (`ok: true` plus) |
-| --- | --- | --- |
-| `list_modules` | `course_id` | `modules: [{id, name, position, items: [{id, title, type, content_id?, page_url?, external_url?}]}]` |
-| `list_files` | `course_id`, `folder?` | `files: [{id, display_name, filename, size, content_type, updated_at, folder}]` |
-| `download_file` | `file_id`, `dest_dir` (under `/data/readings/`) | `file_id, local_path, bytes, sha256, skipped` |
-| `upcoming_assignments` | `course_id`, `days?` (default 7) | `assignments: [{id, name, due_at, html_url, description_text, submission_types[]}]` |
-| `get_page` | `course_id`, `page_url` | `page: {url, title, body_text, updated_at}` |
+| Op | Inputs | Canvas endpoint | Output (`ok: true` plus) |
+| --- | --- | --- | --- |
+| `modules` | `course_id` | `GET /courses/{id}/modules?include[]=items&include[]=content_details` (+ `/modules/{mid}/items` when Canvas omits items) | `items: [{module, module_id, position, item_position, item_type, title, id, content_id, url, html_url, page_url, external_url, published, content_type, size, locked_for_user}]`, `modules` (count) |
+| `files` | `course_id`, `--folder <path>?` | `GET /courses/{id}/files?sort=updated_at&order=desc` + `GET /courses/{id}/folders` | `files: [{id, display_name, filename, content_type, size, updated_at, folder, folder_id, locked_for_user}]`; `folders_error` if the folder lookup failed |
+| `download` | `course_id`, `file_id`, `dest_dir` (under `$DATA_DIR/readings/`) | `GET /courses/{id}/files/{file_id}`, then its pre-signed `url` | `path, bytes, sha256, skipped, file_id, display_name, content_type`. Streams to `<name>.part` (deleted on failure), then renames. `dest_dir/.canvas-manifest.json` records `{file_id, updated_at, bytes, sha256}` per name: same `file_id`, same `updated_at` and size → `skipped: true`, nothing fetched. A name held by another file id (or a file the tool didn't write) is never overwritten; the new file becomes `<root>-<file_id><ext>` |
+| `assignments` | `course_id`, `--upcoming?` | `GET /courses/{id}/assignments?include[]=submission[&bucket=upcoming]` | `assignments: [{id, name, due_at, html_url, description_text, links: [{text, href}], submission_types[], submitted}]`. `description_text` is full length, HTML stripped |
+| `page` | `course_id`, `page_url_or_id` | `GET /courses/{id}/pages/{url}` | `page: {url, title, body_text, links, updated_at, html_url}` |
+| `whoami` | | `GET /users/self` | `user: {id, name}` |
 
-No write ops exist, by design.
+V0 aliases: `list_modules`, `list_files`, `download_file`, `upcoming_assignments` (= `assignments --upcoming`), `get_page`.
+
+No write ops exist, by design. Security rules the implementation enforces (SYL-93):
+`display_name` is sanitized to `[A-Za-z0-9._ -]` (leading dots stripped, empty rejected) before
+anything is written under `dest_dir`; the token goes only to `CANVAS_BASE_URL`'s host and never on
+a redirect; `Link: rel="next"` pages are followed only when https on that same host; redirects
+must be https and must not resolve to private/loopback/link-local addresses;
+`-v` logs `<method> <path>` only.
 
 | code | when | retryable | agent action |
 | --- | --- | --- | --- |
-| `CANVAS_401` | token missing/expired/revoked | no | stop Canvas calls this run; ask Chris to refresh the token |
-| `CANVAS_403` | authenticated but forbidden | no | fall back to the syllabus link, else `needs-human` (ask-a-human condition 1) |
+| `CANVAS_401` | token missing/expired/revoked: a 401 with a `WWW-Authenticate` header or a body naming the token | no | stop Canvas calls this run; ask Chris to refresh the token |
+| `CANVAS_403` | authenticated but forbidden, or the file is locked (includes Canvas's permissions 401 "user not authorized", reported with `status: 401`) | no | fall back to the syllabus link, else `needs-human` (ask-a-human condition 1) |
 | `CANVAS_404` | not found | no | log it, note it in course-notes |
-| `CANVAS_RATE_LIMIT` | 429 | yes | retry once after a pause |
-| `CANVAS_UNAVAILABLE` | 5xx / timeout | yes | retry once |
-| `FILE_TOO_LARGE` | > 100 MB | no | skip it; include the Canvas link in the brief |
+| `CANVAS_RATE` | 429 (or Canvas's 403 "Rate Limit Exceeded") twice; the tool already waited `Retry-After` (≤ 5 s) and retried once | yes (next run) | leave it |
+| `CANVAS_NET` | 5xx / timeout / non-JSON body / 50 s download deadline exceeded (`retryable: true`); refused redirect or unexpected 4xx (`retryable: false`) | see `retryable` | retry once if retryable |
+| `FILE_TOO_LARGE` | > 100 MB | no | skip it; include `detail.canvas_url` in the brief |
+| `BAD_FILENAME` | the Canvas file name sanitizes to nothing | no | skip it; tell Chris |
+| `USAGE` | bad arguments/config, `dest_dir` outside `$DATA_DIR/readings/` | no | a bug in the call |
+
+Tests (no network, fake transport): `python3 -m unittest discover -s tests`.
 
 ---
 
