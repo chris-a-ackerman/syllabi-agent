@@ -310,6 +310,15 @@ class PrepTests(NlmTestCase):
         self.assertEqual(self.assertOk(self.prep())["task_id"], TASK)
         self.assertEqual(sum(a[:2] == ["generate", "audio"] for a in self.argvs()), 1)
 
+    def test_rate_limited_generate_that_started_anyway_is_adopted(self):
+        self.set_state(generate="rate_limited_started")
+        self.assertEqual(self.assertOk(self.prep())["task_id"], TASK)
+        self.assertEqual(sum(a[:2] == ["generate", "audio"] for a in self.argvs()), 1)
+
+    def test_rate_limited_generate_with_no_audio_stays_rate_limited(self):
+        self.set_state(generate="rate_limited")
+        self.assertTrue(self.assertError(self.prep(), "NLM_RATE_LIMIT")["retryable"])
+
     def test_two_audio_overviews_is_not_retryable(self):
         self.set_state(audio=["completed", "in_progress"])
         self.assertFalse(self.assertError(self.prep(), "NLM_UNCONFIRMED")["retryable"])

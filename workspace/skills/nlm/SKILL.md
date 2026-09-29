@@ -92,7 +92,8 @@ imply the subcommand. Every command prints **one JSON object**. Exit code 0 mean
    gives `NLM_TIMEOUT`; one that fails processing is listed in `sources_rejected`
 5. `notebooklm artifact list -n <id> --type audio --json`: an audio overview already there is
    reused as the task. Otherwise `notebooklm generate audio "<prompt>" -n <id> --no-wait --json`
-   returns the task id. An unconfirmed generate is checked against the list again
+   returns the task id. If generate reports any error but auth or timeout, the list is checked
+   again first: a live `RATE_LIMITED` generate still started a podcast
 6. prints `{"notebook_id": "…", "task_id": "…"}`
 
 ```json

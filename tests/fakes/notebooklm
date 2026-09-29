@@ -22,6 +22,7 @@ each argv to $FAKE_NLM_LOG (one JSON line per call). Behaviour comes from $FAKE_
     wait       `source wait` result: "ready" (default) | "timeout" (exit 2) | "error" | "not_found" (exit 1)
     audio      statuses of the audio overviews `artifact list` returns; default none
     generate   also "unconfirmed" | "unconfirmed_committed" (as for create; adds an audio overview)
+               | "rate_limited_started" (RATE_LIMITED, yet the audio overview appears)
 """
 import json
 import os
@@ -132,6 +133,10 @@ def main():
                 save(state)
             out({"error": True, "code": "UNCONFIRMED_WRITE",
                  "message": "Error: this write could not be confirmed (network error)", "unconfirmed": True}, 1)
+        if state.get("generate") == "rate_limited_started":     # seen live: the error, and a podcast anyway
+            state.setdefault("audio", []).append("in_progress")
+            save(state)
+            out({"error": True, "code": "RATE_LIMITED", "message": "Audio generation rate limited by Google."}, 1)
         if state.get("generate") == "rate_limited":
             out({"error": True, "code": "RATE_LIMITED", "message": "Audio generation rate limited by Google.",
                  "hint": "Daily quota may be exceeded."}, 1)

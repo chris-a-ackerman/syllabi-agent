@@ -461,14 +461,22 @@ def nlm_start_audio(cfg, notebook_id, prompt):
     try:
         return nlm_generate_audio(cfg, notebook_id, prompt)
     except NlmError as e:
-        if e.code != "NLM_UNCONFIRMED":
+        if e.code in ("NLM_AUTH", "NLM_TIMEOUT"):
             raise
-        existing = nlm_existing_audio(cfg, notebook_id)
+        # NotebookLM's error is not proof nothing started: a live RATE_LIMITED generate still
+        # produced a podcast. Look again before reporting the failure.
+        try:
+            existing = nlm_existing_audio(cfg, notebook_id)
+        except NlmError:
+            raise e
         if existing:
+            cfg.log("generate: %s, but audio %s was started; using it" % (e.code, existing))
             return existing
-        # Not listed: it never started. The next prep checks the list again before generating.
-        raise NlmError("NLM_UNCONFIRMED", "generate audio could not be confirmed and no audio overview is "
-                       "listed; run prep again (it checks before generating)", retryable=True)
+        if e.code == "NLM_UNCONFIRMED":
+            # Not listed: it never started. The next prep checks the list again before generating.
+            raise NlmError("NLM_UNCONFIRMED", "generate audio could not be confirmed and no audio overview is "
+                           "listed; run prep again (it checks before generating)", retryable=True)
+        raise
 
 
 def nlm_poll(cfg, notebook_id, task_id):
