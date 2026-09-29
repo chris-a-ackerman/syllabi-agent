@@ -179,7 +179,8 @@ class AgentsMdTests(unittest.TestCase):
         self.assertIn("starts nothing", rule9)
         self.assertIn("ignored-sender:", rule9)
         self.assertIn("/data/logs/", rule9)
-        self.assertIn("maintenance command typed in the Maritime dashboard chat", rule9)
+        self.assertIn("maintenance command typed in the operator chat", rule9)
+        self.assertIn("`maritime chat`", rule9)
         self.assertNotIn("paired", self.text, "the sender is TELEGRAM_CHAT_ID, not 'the paired channel'")
 
     def test_shell_rule_is_skills_and_pdf_text_only(self):
@@ -198,8 +199,11 @@ class AgentsMdTests(unittest.TestCase):
         self.assertIn("no writes outside `/data` at runtime", preauth)
         self.assertNotIn("$SYLLABI_BASE_URL", preauth, "the temporary syllabi curl exception is gone")
         self.assertNotIn("Until the `syllabi` skill lands", preauth)
-        # Maintenance from the dashboard chat (git pull, install scripts) is allowed, narrowly.
-        maint = preauth.split("**Maintenance exception (dashboard chat only).**")[1]
+        # Maintenance from the operator chat (dashboard or `maritime chat`: git pull, install
+        # scripts) is allowed, narrowly.
+        maint = preauth.split("**Maintenance exception (operator chat only).**")[1]
+        self.assertIn("**OpenClaw Dashboard**", maint)
+        self.assertIn("`maritime chat class-prep-repo", maint)
         self.assertIn("git pull", maint)
         self.assertIn("install-workspace.sh", maint)
         self.assertIn("never to a cron run, a Telegram message", maint)
