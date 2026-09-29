@@ -7,9 +7,13 @@ Deploying means creating an agent from Maritime's OpenClaw template, cloning thi
 persistent volume, running two install scripts, and adding one Maritime wake trigger. The steps
 were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritime.md).
 
-> **Status: V0 scaffold.** The instructions, schemas, trigger prompts and tool contracts are in
-> place. The skill scripts (`canvas`, `nlm`, `drive`) are stubs, to be filled in by V2–V4.
-> The `brief` skill (SYL-96) is implemented and tested: the brief-writer input bundle under the
+> **Status: V0 scaffold + implemented skills.** The instructions, schemas, trigger prompts and
+> tool contracts are in place. The `drive` skill script is still a stub (V4).
+> The `nlm` skill is implemented (SYL-94, a wrapper over the `notebooklm` CLI, tested against a
+> fake CLI, and run live on Maritime on 2026-09-29 through to a downloaded mp3; the Drive upload
+> waits for V4). The `canvas` (SYL-93) and `syllabi` (SYL-96) skills
+> are implemented and tested.
+> The `brief` skill is implemented and tested: the brief-writer input bundle under the
 > 40k-token cap, the reply validation (schema + fuzzy ≥ 0.9 hallucination filter) and the
 > Telegram formatting; so is the standalone `pdf-text` helper it shares its extractor with.
 > The `preplog` memory skill (SYL-100, memory half) is implemented and tested: the prep-log state machine with
@@ -39,14 +43,16 @@ were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritim
 │   │   │   ├── SKILL.md          ← the schedule of record: upcoming / course / check, errors, agent rules
 │   │   │   └── scripts/syllabi.py← the CLI over the app's agent-upcoming endpoint; `syllabi` is a symlink
 │   │   ├── canvas/SKILL.md       ← Canvas LMS reads (stub)
-│   │   ├── nlm/SKILL.md          ← nlm-prep / nlm-status for NotebookLM (stub)
+│   │   ├── nlm/
+│   │   │   ├── SKILL.md          ← NotebookLM podcasts: prep / status / check, errors, agent rules
+│   │   │   └── scripts/nlm.py    ← wrapper over the notebooklm CLI; nlm-prep and nlm-status are symlinks to it
 │   │   ├── drive/SKILL.md        ← drive-put via rclone (stub)
 │   │   ├── brief/                ← brief-writer pipeline: bundle, validate, format (SYL-96)
 │   │   │   ├── SKILL.md
 │   │   │   └── scripts/brief.py    (+ `brief` symlink)
-│   │   └── pdf-text/             ← PDF → text (pdftotext → pypdf → built-in), reuses brief.py's extractor
-│   │       ├── SKILL.md
-│   │       └── scripts/pdf_text.py (+ `pdf-text` symlink)
+│   │   ├── pdf-text/             ← PDF → text (pdftotext → pypdf → built-in), reuses brief.py's extractor
+│   │   │   ├── SKILL.md
+│   │   │   └── scripts/pdf_text.py (+ `pdf-text` symlink)
 │   │   └── preplog/              ← memory tool: prep-log state machine, run log, course notes (SYL-100, memory half)
 │   │       ├── SKILL.md
 │   │       └── scripts/preplog.py  (+ `preplog` symlink)
@@ -64,11 +70,12 @@ were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritim
 │   ├── tool-contract.md          ← every tool: name, inputs, outputs, error shape
 │   └── hw2-writeup.md            ← HW2 writeup skeleton (one heading per rubric item)
 ├── tests/
-│   └── test_syllabi.py           ← syllabi skill tests, no network: python3 -m unittest discover -s tests
-│   ├── test_brief.py             ← unit tests for the brief skill (no network): python3 -m unittest discover -s tests
-│   └── test_pdf_text.py          ← unit tests for the pdf-text helper
-│   └── test_preplog.py           ← unit tests for the preplog skill (no network): python3 -m unittest discover -s tests
-│   └── test_canvas.py            ← canvas skill tests, no network: python3 -m unittest discover -s tests
+│   ├── test_nlm.py               ← nlm skill tests, no network: python3 -m unittest discover -s tests
+│   ├── test_syllabi.py           ← syllabi skill tests, no network
+│   ├── test_brief.py             ← unit tests for the brief skill (no network)
+│   ├── test_pdf_text.py          ← unit tests for the pdf-text helper
+│   ├── test_preplog.py           ← unit tests for the preplog skill (no network)
+│   └── test_canvas.py            ← canvas skill tests, no network
 └── evidence/
     ├── eval/cases.md             ← the 5 eval cases, baseline vs improved (results blank)
     └── failures/                 ← screenshots/logs of failures and recoveries
@@ -84,9 +91,9 @@ At runtime (on the Maritime volume, never in git). `HOME` is `/data`:
 ├── memory/course-notes.md        ← learned per-course quirks
 ├── logs/<YYYY-MM-DD>-<trigger>.md← one run log per trigger firing (appended)
 ├── readings/<course>/<date>/     ← downloaded PDFs
-├── podcasts/<course>/<date>.mp3  ← NotebookLM audio overviews
+├── podcasts/<course>-<date>.mp3  ← NotebookLM audio overviews
 ├── work/<course>/<date>/         ← extracted text, brief-writer input/output
-├── secrets/notebooklm-cookies.json
+├── notebooklm/                   ← NOTEBOOKLM_HOME: agent-account auth (700 / 600)
 └── rclone/rclone.conf
 ```
 
@@ -108,8 +115,9 @@ Timing: **24 hours before class** if something is due beforehand, **morning-of**
 - **Store readings:** Google Drive folder `Readings/<course>/<date>/`. iCloud has no server API;
   the iPad Files app mounts Drive, and Goodnotes imports from Drive.
 - **Goodnotes import:** *not* automatable. It takes one manual tap, and the writeup says so.
-- **NotebookLM podcast:** `notebooklm-py` (unofficial, cookie auth). There is no consumer API.
-  Cookie expiry is a real failure mode, and it is the rubric's failure-recovery test.
+- **NotebookLM podcast:** notebooklm-py's `notebooklm` CLI (unofficial). There is no consumer API.
+  Production auth is a master-token login of a dedicated agent account. A stale cookie-mode
+  `storage_state.json` is the rubric's failure-recovery test (`NLM_AUTH`).
 - **Pre-class questions:** a subagent drafts them and I review them. The agent never submits
   anything to Canvas.
 - **External readings behind logins** (HBS cases, library): the agent escalates to me on
@@ -122,7 +130,7 @@ Timing: **24 hours before class** if something is due beforehand, **morning-of**
   OpenClaw cron jobs in America/New_York** that do the work
   ([`triggers/README.md`](triggers/README.md) explains why both are needed).
 - **Only `/data` persists** across sleep/wake/restart. `HOME` is `/data`, so `~/.openclaw` (config,
-  cron jobs, workspace) persists too. All memory files, logs, secrets (NotebookLM cookies, rclone
+  cron jobs, workspace) persists too. All memory files, logs, secrets (NotebookLM auth, rclone
   config), downloaded readings and podcasts go under `/data`.
 - **30-second chat reply budget, 60 s default command timeout.** Long work runs in the background,
   so podcast generation is *started* in one run and *polled* by a later one. Over `maritime chat`,
@@ -147,11 +155,18 @@ Full contracts in [`docs/tool-contract.md`](docs/tool-contract.md).
   the pre-signed download redirect, refuses redirects to non-https or private addresses.
 - **syllabi endpoint:** `GET /agent/upcoming?days=3` (sessions, topics, reading links, anything
   due, `canvas_course_id`), `GET /agent/course/:id`. Bearer agent token.
-- **`nlm-prep <course> <date> <pdf...>`** creates a notebook, adds sources, *starts* the audio
-  overview, and returns `{notebook_id}` immediately.
-  **`nlm-status <notebook_id>`** returns `{status: pending|ready|failed, audio_url?}`. When the
-  audio is ready, it downloads the mp3 to `/data/podcasts/` and pushes it to Drive.
-  Cookies are at `/data/secrets/notebooklm-cookies.json`. Auth failure returns error code `NLM_AUTH`.
+- **`nlm-prep <course> <date> <pdf...> --topic "<topic>"`** (`workspace/skills/nlm/scripts/nlm.py
+  prep`) is a thin wrapper over notebooklm-py's `notebooklm` CLI. It runs `auth check`, `create
+  --use` (or reuses the session's notebook), `source add` for each PDF, `source wait` until
+  NotebookLM has processed them, and `generate audio --no-wait` (or reuses an audio overview
+  already started), then returns `{notebook_id, task_id}`. It refuses to start a second podcast when the prep-log
+  already has a `notebook_id`.
+  **`nlm-status <notebook_id> <task_id>`** runs `artifact poll` and returns
+  `{status: pending|ready|failed, local_path, drive_url}`. When the audio is ready, it has
+  downloaded it to `/data/podcasts/<course>-<date>.mp3` and run `drive-put`. `nlm.py check` is
+  the auth smoke test. Auth is a master-token login of a dedicated agent Google account, stored
+  in `/data/notebooklm/` (chmod 600). A stale or missing session returns exactly
+  `{"error": "NLM_AUTH"}`.
 - **`drive-put <local_path> <remote_dir>`** returns a share link, via rclone. Config is at
   `/data/rclone/rclone.conf`. Idempotent.
 - **Telegram** (Maritime channel) for briefs and questions, sent with `maritime-telegram-send`.
@@ -224,7 +239,7 @@ brief (drafts marked as drafts, Drive links, podcast link or "podcast pending") 
 ### Failure recovery (rubric 5)
 
 - **Expired NotebookLM cookie:** `NLM_AUTH` → one retry → session marked `partial` → Drive links
-  + brief still sent on schedule → Telegram asks for fresh cookies → the next prep run does only
+  + brief still sent on schedule → Telegram asks for a NotebookLM re-login → the next prep run does only
   the podcast step.
 - **Canvas 403:** fall back to the syllabus link if present, else `needs-human`.
 
@@ -264,5 +279,7 @@ deploy. The full runbook is in [`docs/deploy-maritime.md`](docs/deploy-maritime.
 | new | Config persistence | `openclaw config patch` changes survive `maritime restart`; Maritime does not regenerate `openclaw.json`. |
 | new | Filesystem persistence | On restart Maritime logs "Captured derived image … Edits will survive restart", so installs outside `/data` should persist too. Confirm with the first V2 install. |
 
-Still to check: whether `python3` (all the canvas skill needs), `pip`, `notebooklm-py` and `rclone`
-are available, and that an install survives a restart.
+Checked 2026-09-29: `python3` is 3.11 but has no `pip`; the nlm skill's `notebooklm` CLI goes in a
+venv at `/data/venvs/nlm` with `NLM_BIN` pointing at it (see the deploy runbook §7). The venv,
+`NLM_BIN` and the NotebookLM login survive `maritime restart` (checked the same day). Still to
+check: whether `rclone` is available.

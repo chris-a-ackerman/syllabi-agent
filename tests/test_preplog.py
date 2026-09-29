@@ -482,6 +482,15 @@ class NotebookTests(PrepLogTestCase):
         self.assertFalse(again["changed"])
         self.assertEqual(len(self.session()["history"]), len(s["history"]))
 
+    def test_set_notebook_records_task_id_for_nlm_status(self):
+        self.make()
+        body = self.ok("set-notebook", KEY, "nb_abc", "--task-id", "task_1")
+        self.assertEqual(body["task_id"], "task_1")
+        self.assertEqual(self.session()["task_id"], "task_1")
+        self.assertFalse(self.ok("set-notebook", KEY, "nb_abc", "--task-id", "task_1")["changed"])
+        pending = self.ok("due")["podcast_pending"]
+        self.assertEqual([(p["notebook_id"], p["task_id"]) for p in pending], [("nb_abc", "task_1")])
+
     def test_second_notebook_is_refused(self):
         self.make()
         self.ok("set-notebook", KEY, "nb_abc")

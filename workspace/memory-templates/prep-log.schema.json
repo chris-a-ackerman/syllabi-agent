@@ -98,7 +98,11 @@
           "type": "string",
           "description": "Set by nlm-prep. If present, NEVER start another podcast for this session."
         },
-        "podcast_url": { "type": "string", "description": "Drive share link to the mp3, set by nlm-status when ready." },
+        "task_id": {
+          "type": "string",
+          "description": "Set by nlm-prep alongside notebook_id: the audio generation task that nlm-status polls."
+        },
+        "podcast_url": { "type": "string", "description": "Drive link to the mp3 (nlm-status drive_url), set when ready." },
         "brief": { "$ref": "brief.schema.json" },
         "notify_at": {
           "type": "string",

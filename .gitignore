@@ -5,7 +5,10 @@
 !.env.example
 *.cookies.json
 notebooklm-cookies.json
-storage_state.json
+storage_state*.json
+master_token.json
+.notebooklm/
+notebooklm/
 rclone.conf
 secrets/
 *.pem

@@ -140,33 +140,60 @@ Tests (no network, fake transport): `python3 -m unittest discover -s tests`.
 
 ---
 
-## 3. `nlm` skill (NotebookLM via `notebooklm-py`)
+## 3. `nlm` skill (NotebookLM via notebooklm-py's `notebooklm` CLI)
 
-Cookies: `$NLM_COOKIES_PATH` = `/data/secrets/notebooklm-cookies.json`.
+Implemented as `workspace/skills/nlm/scripts/nlm.py` (SYL-94). `scripts/nlm-prep` and
+`scripts/nlm-status` are symlinks to it that imply the subcommand. It is a thin wrapper: each
+NotebookLM step is one `notebooklm … --json` subprocess run from an argv list (never a shell),
+with `NOTEBOOKLM_HOME=/data/notebooklm`, and a timeout equal to the time left in the 50 s budget.
+Auth is a master-token login for the dedicated agent account, or `NOTEBOOKLM_AUTH_JSON`.
 
-### `nlm-prep <course> <date> <pdf...>`
+**Envelope (differs from §0):** success is the SYL-94 shape itself (no `ok` key). An error is
+`{"error": "<CODE>", "message", "retryable"}` with exit 2, and a wrapper crash is
+`{"error": "INTERNAL"}` with exit 1. `NLM_AUTH` is always exactly `{"error": "NLM_AUTH"}`.
+
+### `nlm-prep <course_code> <date> <pdf...> --topic "<session topic>"` (= `nlm.py prep`)
 
 | | |
 | --- | --- |
-| Inputs | `course` (e.g. `MAS.665`), `date` (`YYYY-MM-DD`), one or more PDF paths under `/data/readings/` |
-| Behavior | create notebook `"<course> — <date>"`, add sources, **start** audio overview, return immediately |
-| Output | `{ok: true, notebook_id, sources_added, audio: "started"}` |
-| Precondition | the agent must not call it if the prep-log record has a `notebook_id` |
+| Steps | `auth check --test --json` → `list --json` (reuse a notebook already titled `<course_code> — <date>`) or `create "<course_code> — <date>" --use --json` → per PDF `source add <pdf> --title "<name>" -n <id> --json` → per source `source wait <source_id> -n <id> --timeout <budget> --json` → `artifact list -n <id> --type audio --json` (reuse an audio overview already there) or `generate audio "<prompt>" -n <id> --no-wait --json` |
+| Prompt | template in the nlm `SKILL.md` ("…how they relate to `<session topic>`"). The topic travels as data inside one argv element: control characters are flattened and it is capped at 300 characters |
+| Output | `{notebook_id, task_id}`, plus `sources_rejected: [name]` when some PDFs were refused, plus `skipped: true` when the session already had a notebook (prep-log `notebook_id`, or this tool's job record `/data/work/nlm/<course>-<date>.json`). Nothing new is started in that case |
+| Resume | after a timeout or error mid-way, the next `prep` checks the saved notebook still exists (`NLM_NOT_FOUND` if it was deleted), reuses it, skips PDFs already added or already ready, and reuses an audio overview already started. It never creates a second notebook or podcast |
 
-### `nlm-status <notebook_id> [--course C --date D]`
+### `nlm-status <notebook_id> <task_id> [--course C --date D]` (= `nlm.py status`)
 
 | | |
 | --- | --- |
-| Output | `{ok: true, status: "pending"}` · `{ok: true, status: "ready", audio_url, local_path, drive_link}` · `{ok: true, status: "failed", reason}` |
-| Side effect on `ready` | downloads the mp3 to `/data/podcasts/<course>/<date>.mp3` and pushes it to Drive (`drive-put` logic). Idempotent |
+| Steps | `artifact poll <task_id> -n <id> --json`. On `completed`: `download audio /data/podcasts/<course>-<date>.mp3 -n <id> --latest --json` (via `.part` + rename), then `drive-put <mp3> Podcasts` (§4), reading `web_url`. Never `generate` |
+| Output | `{status: "pending" \| "ready" \| "failed", local_path, drive_url}`. `failed` may add `error_code`. `pending` with a `local_path` adds `drive_error`: the mp3 is downloaded but the upload failed or was deferred (`DRIVE_DEFERRED` when fewer than 15 s were left), and the next call retries only the upload |
+| course/date | from the flags, else from prep's job record, else from the prep-log record that holds `notebook_id` |
+
+### `nlm.py check`
+
+`{status: "ok", notebooklm_home}`, or `{"error": "NLM_AUTH"}`: the auth smoke test (`auth check --test`).
+
+Security rules the implementation enforces (SYL-94 Security):
+- Source paths must resolve (realpath) under `$DATA_DIR/readings/`. `course`, `date`, and the ids are validated before use.
+- `NOTEBOOKLM_HOME` is kept at mode 700 and its `storage_state.json` / `master_token.json` files at 600. Looser modes are tightened with a warning; if they can't be tightened, the command refuses to run (`NLM_AUTH_PERMS`).
+- The CLI's stderr is dropped, and its error text is never copied into this tool's output. Only its `code` is mapped.
 
 | code | when | retryable | agent action |
 | --- | --- | --- | --- |
-| `NLM_AUTH` | cookies expired/invalid | yes (**once**) | after the retry fails: `partial`, ask for fresh cookies (condition 3); brief and Drive links still go out on schedule; the next prep run does only the podcast step |
-| `NLM_NOT_FOUND` | notebook id unknown | no | ask Chris before clearing `notebook_id` |
-| `NLM_SOURCE_REJECTED` | a source couldn't be added | no | continue with the rest; note it in the brief |
-| `NLM_RATE_LIMIT` | quota / throttled | yes (next poll) | stay `podcast-pending` |
-| `NLM_UNAVAILABLE` | network / unexpected response | yes (once) | then `partial` |
+| `NLM_AUTH` | `auth check --test` failed, or any call returned `AUTH_REQUIRED` / `AUTH_ERROR` (stale or expired session) | once | after the retry: `partial`, ask for re-login (condition 3); brief and Drive still go out |
+| `NLM_AUTH_PERMS` | credential file permissions can't be tightened | no | tell Chris |
+| `NLM_RATE_LIMIT` | `RATE_LIMITED`, `NOTEBOOK_LIMIT` | yes (next poll) | stay `podcast-pending` |
+| `NLM_SOURCE_REJECTED` | every PDF refused (`VALIDATION_ERROR` on `source add`) | no | `partial` for the podcast |
+| `NLM_NOT_FOUND` | `NOT_FOUND` | no | ask Chris before clearing `notebook_id` |
+| `NLM_GENERATION_FAILED` | `GENERATION_FAILED` | no | `partial` |
+| `NLM_TIMEOUT` | the budget ran out mid-command, usually while the PDFs process | yes | `prep`: run it again now, up to twice more this run (it resumes); `status`: next poll |
+| `NLM_UNAVAILABLE` | `NETWORK_ERROR` and similar (retryable), or unexpected output / a CLI crash | see `retryable` | retry once, then `partial` |
+| `NLM_UNCONFIRMED` | `UNCONFIRMED_WRITE` on create or generate with nothing listed afterwards, or two notebooks with the session's title, or two audio overviews | only the first case | `retryable`: prep again; else `partial` and ask Chris (never a second podcast) |
+| `NLM_NOT_INSTALLED` | no `notebooklm` on `PATH` | no | tell Chris |
+| `USAGE` | bad arguments | no | a bug in the call |
+
+Tests (no network; a fake `notebooklm` executable that prints the real `--json` shapes):
+`python3 -m unittest discover -s tests`.
 
 ---
 
@@ -319,7 +346,7 @@ run-log file) and `--now ISO` (evals and tests only). `<key>` is `<course>@<YYYY
 | `begin <key>` | | `skip, reason?, attempts, plan, notify_chris?` (stop rules: skips `podcast-pending, ready, notified-partial, done, needs-human`; counts one attempt) |
 | `add-reading <key>` | `--title --source canvas_file\|external --id-or-url` `[--local-path --drive-path --requires-login --truncated-for-brief]` | `created, reading, readings, plan` (idempotent on source + id_or_url) |
 | `add-drive-path <key> <path>` | | `added, drive_paths` |
-| `set-notebook <key> <id>` | | `changed, status_before, status` (→ `podcast-pending`) |
+| `set-notebook <key> <id> [--task-id T]` | | `changed, task_id, status_before, status` (→ `podcast-pending`) |
 | `set-podcast <key> --url` | | `changed, status_before, status, send?` (`podcast-pending` → `ready`; `notified-partial` stays, `send: "podcast-link-only"`) |
 | `set-brief <key> --from FILE\|-` | brief JSON | `replaced, questions, plan` |
 | `set-status <key> <status>` | `--error-code --error-message --step`, `--clear-error`, `--reset-attempts` (with `pending`, `--trigger human\|manual` only) | `changed, status_before, status, attempts, last_error` |

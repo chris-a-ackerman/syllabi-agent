@@ -11,7 +11,7 @@
     begin <key>                             start work on a record in this run: skip rules, attempts, the plan
     add-reading <key> ...                   record a reading (idempotent on source + id_or_url)
     add-drive-path <key> <path>             record a Drive path or share link (idempotent)
-    set-notebook <key> <notebook_id>        record nlm-prep's notebook; refuses a second one
+    set-notebook <key> <notebook_id> [--task-id T]  record nlm-prep's notebook; refuses a second one
     set-podcast <key> --url URL             record the podcast link (podcast-pending -> ready)
     set-brief <key> --from FILE|-           validate against brief.schema.json and store the brief
     set-status <key> <status> [...]         move the state machine, with an optional last_error
@@ -97,7 +97,7 @@ PREP_SKIP_STATUSES = ("podcast-pending", "ready", "notified-partial", "done", "n
 # upsert --from-json may not set these: each has its own guarded command.
 PROTECTED_FIELDS = {
     "history": "preplog log", "attempts": "preplog begin / set-status --reset-attempts",
-    "notebook_id": "preplog set-notebook", "status": "preplog set-status",
+    "notebook_id": "preplog set-notebook", "task_id": "preplog set-notebook", "status": "preplog set-status",
     "brief_sent_at": "preplog mark-sent", "podcast_sent_at": "preplog mark-sent",
     "podcast_url": "preplog set-podcast", "brief": "preplog set-brief", "last_error": "preplog set-status",
 }
@@ -583,6 +583,7 @@ def summary(key, s):
         "attempts": s.get("attempts"),
         "notify_at": s.get("notify_at"),
         "notebook_id": s.get("notebook_id"),
+        "task_id": s.get("task_id"),
         "podcast_url": s.get("podcast_url"),
         "has_brief": s.get("brief") is not None,
         "readings": len(s.get("readings") or []),
@@ -882,6 +883,7 @@ def cmd_set_notebook(ctx, args):
     nid = clean_text(args.notebook_id, 300)
     if not nid:
         raise usage("notebook_id is empty")
+    tid = clean_text(args.task_id, 300) if args.task_id else None
     with ctx.store as store:
         doc = store.load()
         s = store.require(doc, args.key)
@@ -890,9 +892,17 @@ def cmd_set_notebook(ctx, args):
             raise PrepLogError("ALREADY_HAS_NOTEBOOK", "%s already has notebook %s; never start a second podcast "
                                "(hard rule 4). Poll it with nlm-status instead." % (args.key, existing),
                                detail={"notebook_id": existing, "status": s.get("status")})
-        if existing == nid:
+        if existing == nid and (not tid or s.get("task_id") == tid):
             return {"key": args.key, "changed": False, "notebook_id": nid, "status": s.get("status")}
+        if existing == nid:
+            s["task_id"] = tid
+            add_history(cfg, s, "nlm-prep task %s recorded for notebook %s" % (tid, nid))
+            store.check_session(args.key, s)
+            store.save(doc)
+            return {"key": args.key, "changed": True, "notebook_id": nid, "task_id": tid, "status": s.get("status")}
         s["notebook_id"] = nid
+        if tid:
+            s["task_id"] = tid
         before = s.get("status")
         if before not in ("done", "notified-partial"):
             s["status"] = "podcast-pending"
@@ -902,7 +912,8 @@ def cmd_set_notebook(ctx, args):
         add_history(cfg, s, "nlm-prep started: notebook %s" % nid)
         store.check_session(args.key, s)
         store.save(doc)
-    return {"key": args.key, "changed": True, "notebook_id": nid, "status_before": before, "status": s["status"]}
+    return {"key": args.key, "changed": True, "notebook_id": nid, "task_id": s.get("task_id"),
+            "status_before": before, "status": s["status"]}
 
 
 def cmd_set_podcast(ctx, args):
@@ -1079,7 +1090,8 @@ def cmd_due(ctx, args):
         in_flight = status == "podcast-pending" or (
             status == "notified-partial" and s.get("notebook_id") and not s.get("podcast_url"))
         if in_flight:
-            pending.append({"key": key, "notebook_id": s.get("notebook_id"), "attempts": s.get("attempts")})
+            pending.append({"key": key, "notebook_id": s.get("notebook_id"), "task_id": s.get("task_id"),
+                            "attempts": s.get("attempts")})
         if status == "needs-human" and s.get("class_date") == today:
             reminded = any(str(h.get("action", "")).lower().startswith("reminder") for h in s.get("history") or [])
             humans.append({"key": key, "last_error": s.get("last_error"), "reminded": reminded})
@@ -1291,6 +1303,7 @@ def build_parser():
     s = sub.add_parser("set-notebook", help="record nlm-prep's notebook id (refuses a second one)")
     s.add_argument("key")
     s.add_argument("notebook_id")
+    s.add_argument("--task-id", help="nlm-prep's audio task id, which nlm-status polls")
     s.set_defaults(func=cmd_set_notebook)
 
     s = sub.add_parser("set-podcast", help="record the podcast link")
