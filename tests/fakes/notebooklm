@@ -15,6 +15,9 @@ each argv to $FAKE_NLM_LOG (one JSON line per call). Behaviour comes from $FAKE_
     crash      a command name that dies with a traceback and no JSON (exit 2)
     sleep      seconds to sleep before answering
     secret     a string planted in auth details and stderr (must never reach nlm's output)
+    notebooks  titles `list` returns (each gets NB_ID, or NB_ID2 for a repeat); default none
+    create     "ok" | "unconfirmed" (UNCONFIRMED_WRITE, exit 1) | "unconfirmed_committed"
+               (UNCONFIRMED_WRITE, and the notebook shows up in `list` afterwards)
 """
 import json
 import os
@@ -23,6 +26,7 @@ import time
 
 AUDIO = b"\x00\x00\x00\x18ftypM4A \x00\x00\x00\x00M4A mp42isom" + b"\x00" * 64
 NB_ID = "0a1b2c3d-4e5f-6789-abcd-ef0123456789"
+NB_ID2 = "1b2c3d4e-5f60-789a-bcde-f0123456789a"
 TASK_ID = "9f8e7d6c-5b4a-3210-fedc-ba9876543210"
 
 
@@ -74,8 +78,20 @@ def main():
     if auth == "expired":
         out({"error": True, "code": "AUTH_ERROR", "message": "Error: Authentication expired. SID=%s" % secret}, 1)
 
+    if argv[0] == "list":
+        titles = state.get("notebooks", [])
+        out({"notebooks": [{"id": NB_ID if titles.index(t) == i else NB_ID2, "title": t, "is_owner": True}
+                           for i, t in enumerate(titles)], "count": len(titles)})
+
     if argv[0] == "create":
         title = argv[1]
+        if state.get("create", "ok").startswith("unconfirmed"):
+            if state["create"] == "unconfirmed_committed":
+                state.setdefault("notebooks", []).append(title)
+                with open(os.environ["FAKE_NLM_STATE"], "w") as fh:
+                    json.dump(state, fh)
+            out({"error": True, "code": "UNCONFIRMED_WRITE",
+                 "message": "Error: this write could not be confirmed (network error)", "unconfirmed": True}, 1)
         data = {"notebook": {"id": NB_ID, "title": title, "role": "owner",
                              "created_at": "2026-09-28T19:00:00", "is_owner": True}}
         if "--use" in argv:

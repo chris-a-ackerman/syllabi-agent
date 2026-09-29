@@ -156,7 +156,7 @@ Auth is a master-token login for the dedicated agent account, or `NOTEBOOKLM_AUT
 
 | | |
 | --- | --- |
-| Steps | `auth check --test --json` → `create "<course_code> — <date>" --use --json` → per PDF `source add <pdf> --title "<name>" -n <id> --json` → `generate audio "<prompt>" -n <id> --no-wait --json` |
+| Steps | `auth check --test --json` → `list --json` (reuse a notebook already titled `<course_code> — <date>`) or `create "<course_code> — <date>" --use --json` → per PDF `source add <pdf> --title "<name>" -n <id> --json` → `generate audio "<prompt>" -n <id> --no-wait --json` |
 | Prompt | template in the nlm `SKILL.md` ("…how they relate to `<session topic>`"). The topic travels as data inside one argv element: control characters are flattened and it is capped at 300 characters |
 | Output | `{notebook_id, task_id}`, plus `sources_rejected: [name]` when some PDFs were refused, plus `skipped: true` when the session already had a notebook (prep-log `notebook_id`, or this tool's job record `/data/work/nlm/<course>-<date>.json`). Nothing new is started in that case |
 | Resume | after a timeout or error mid-way, the next `prep` reuses the created notebook and skips PDFs already added. It never creates a second notebook |
@@ -188,6 +188,7 @@ Security rules the implementation enforces (SYL-94 Security):
 | `NLM_GENERATION_FAILED` | `GENERATION_FAILED` | no | `partial` |
 | `NLM_TIMEOUT` | the budget ran out mid-command | yes | next poll (`prep` resumes) |
 | `NLM_UNAVAILABLE` | `NETWORK_ERROR` and similar (retryable), or unexpected output / a CLI crash | see `retryable` | retry once, then `partial` |
+| `NLM_UNCONFIRMED` | `UNCONFIRMED_WRITE`: a write NotebookLM could not confirm, or two notebooks with the session's title | only for an unlisted create | `retryable`: prep again next poll; else `partial` and ask Chris (never a second podcast) |
 | `NLM_NOT_INSTALLED` | no `notebooklm` on `PATH` | no | tell Chris |
 | `USAGE` | bad arguments | no | a bug in the call |
 

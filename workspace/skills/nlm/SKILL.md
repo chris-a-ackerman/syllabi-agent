@@ -60,7 +60,10 @@ imply the subcommand. Every command prints **one JSON object**. Exit code 0 mean
 ### `nlm-prep <course_code> <date> <pdf>... --topic "<session topic>"`
 
 1. `notebooklm auth check --test --json`. `AUTH_REQUIRED`, or a failed check, gives `{"error": "NLM_AUTH"}`
-2. `notebooklm create "<course_code> — <date>" --use --json` returns the notebook id
+2. `notebooklm list --json`: a notebook already titled `<course_code> — <date>` is reused (an
+   earlier create may have committed without confirming). Otherwise `notebooklm create
+   "<course_code> — <date>" --use --json` returns the notebook id. If that create comes back
+   `UNCONFIRMED_WRITE`, the list is checked again and a notebook that did commit is reused
 3. for each PDF (must be under `/data/readings/`): `notebooklm source add <pdf> --title "<name>" -n <id> --json`
 4. `notebooklm generate audio "<prompt>" -n <id> --no-wait --json` returns the task id
 5. prints `{"notebook_id": "…", "task_id": "…"}` and returns at once
@@ -123,6 +126,7 @@ always exactly `{"error": "NLM_AUTH"}`: no message, and nothing from the auth pa
 | `NLM_NOT_FOUND` | notebook or task unknown | ask Chris before clearing `notebook_id`. Never silently start a second podcast |
 | `NLM_TIMEOUT` | the command hit its budget (`retryable: true`) | run it again on the next poll. `prep` resumes the same notebook |
 | `NLM_UNAVAILABLE` | network error, or unexpected CLI output or crash | retry once if `retryable`, then `partial` |
+| `NLM_UNCONFIRMED` | NotebookLM could not confirm a write. `retryable: true` only for a create whose notebook is not listed (the next `prep` lists before creating). Otherwise, e.g. two notebooks with the session's title or an unconfirmed `generate audio`, retrying could duplicate it | if `retryable`, run `prep` again on the next poll. Otherwise mark `partial` and ask Chris to check NotebookLM; never start another podcast |
 | `NLM_NOT_INSTALLED` | `notebooklm` isn't on `PATH` | tell Chris: `pip install "notebooklm-py[headless]"` |
 | `USAGE` | bad arguments (file outside `/data/readings/`, bad date, missing `--topic`) | a bug in the call: fix it, don't retry |
 

@@ -108,7 +108,8 @@ _CLI_CODES = {
     "GENERATION_FAILED": ("NLM_GENERATION_FAILED", False),
     "NETWORK_ERROR": ("NLM_UNAVAILABLE", True),
     "ARTIFACT_TIMEOUT": ("NLM_UNAVAILABLE", True),
-    "UNCONFIRMED_WRITE": ("NLM_UNAVAILABLE", True),
+    # The CLI could not tell whether a write committed; a blind retry can duplicate it.
+    "UNCONFIRMED_WRITE": ("NLM_UNCONFIRMED", False),
     "CONFIG_ERROR": ("NLM_UNAVAILABLE", False),
     "NOTEBOOKLM_ERROR": ("NLM_UNAVAILABLE", False),
     "UNEXPECTED_ERROR": ("NLM_UNAVAILABLE", False),
@@ -336,9 +337,45 @@ def _str_field(obj, *keys):
     return obj if isinstance(obj, str) and obj else None
 
 
+def nlm_find_notebooks(cfg, title):
+    """Ids of the notebooks titled exactly `title` (`notebooklm list --json`)."""
+    rc, obj = run_notebooklm(cfg, ["list", "--json"], "list notebooks")
+    raise_for_cli_error(rc, obj, "list notebooks")
+    notebooks = obj.get("notebooks")
+    if not isinstance(notebooks, list):
+        raise NlmError("NLM_UNAVAILABLE", "list notebooks: no notebook list in the CLI output", retryable=True)
+    return [nb["id"] for nb in notebooks
+            if isinstance(nb, dict) and nb.get("title") == title
+            and isinstance(nb.get("id"), str) and _ID_RE.match(nb["id"])]
+
+
+def nlm_existing_notebook(cfg, title):
+    """The one notebook already titled `title`, or None. Two or more is for Chris to sort out."""
+    found = nlm_find_notebooks(cfg, title)
+    if len(found) > 1:
+        raise NlmError("NLM_UNCONFIRMED", "%d notebooks are titled %r; delete the extras in NotebookLM, "
+                       "then run prep again" % (len(found), title))
+    return found[0] if found else None
+
+
 def nlm_create(cfg, title):
+    """Create the notebook, or adopt the one an earlier unconfirmed create left behind."""
+    existing = nlm_existing_notebook(cfg, title)
+    if existing:
+        cfg.log("create: %r already exists; reusing it" % title)
+        return existing
     rc, obj = run_notebooklm(cfg, ["create", title, "--use", "--json"], "create notebook")
-    raise_for_cli_error(rc, obj, "create notebook")
+    try:
+        raise_for_cli_error(rc, obj, "create notebook")
+    except NlmError as e:
+        if e.code != "NLM_UNCONFIRMED":
+            raise
+        existing = nlm_existing_notebook(cfg, title)
+        if existing:
+            return existing
+        # Not listed: most likely it never committed. The next prep lists before creating again.
+        raise NlmError("NLM_UNCONFIRMED", "create notebook could not be confirmed and %r is not listed; "
+                       "run prep again on the next poll" % title, retryable=True)
     nb_id = _str_field(obj, "notebook", "id") or _str_field(obj, "active_notebook_id")
     if not nb_id or not _ID_RE.match(nb_id):
         raise NlmError("NLM_UNAVAILABLE", "create notebook: no notebook id in the CLI output", retryable=True)

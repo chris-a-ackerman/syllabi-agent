@@ -171,12 +171,13 @@ class PrepTests(NlmTestCase):
         self.assertEqual(body, {"notebook_id": NB, "task_id": TASK})
         argvs = self.argvs()
         self.assertEqual(argvs[0], ["auth", "check", "--test", "--json"])
-        self.assertEqual(argvs[1], ["create", TITLE, "--use", "--json"])
-        self.assertEqual(argvs[2], ["source", "add", self.pdf1, "--title", "week4", "-n", NB, "--json"])
-        self.assertEqual(argvs[3], ["source", "add", self.pdf2, "--title", "Case Study", "-n", NB, "--json"])
-        self.assertEqual(argvs[4][:2], ["generate", "audio"])
-        self.assertEqual(argvs[4][3:], ["-n", NB, "--no-wait", "--json"])
-        self.assertEqual(len(argvs), 5)
+        self.assertEqual(argvs[1], ["list", "--json"])
+        self.assertEqual(argvs[2], ["create", TITLE, "--use", "--json"])
+        self.assertEqual(argvs[3], ["source", "add", self.pdf1, "--title", "week4", "-n", NB, "--json"])
+        self.assertEqual(argvs[4], ["source", "add", self.pdf2, "--title", "Case Study", "-n", NB, "--json"])
+        self.assertEqual(argvs[5][:2], ["generate", "audio"])
+        self.assertEqual(argvs[5][3:], ["-n", NB, "--no-wait", "--json"])
+        self.assertEqual(len(argvs), 6)
         self.assertEqual({c["home"] for c in self.calls()}, {self.home}, "NOTEBOOKLM_HOME is under DATA_DIR")
 
     def test_prompt_comes_from_the_skill_md_template_with_the_topic(self):
@@ -246,6 +247,29 @@ class PrepTests(NlmTestCase):
         argvs = self.argvs()
         self.assertEqual(sum(a[0] == "create" for a in argvs), 1)
         self.assertEqual(sum(a[:2] == ["source", "add"] for a in argvs), 2, "sources are not re-added")
+
+    def test_existing_notebook_with_the_title_is_reused_not_recreated(self):
+        self.set_state(notebooks=[TITLE])
+        self.assertEqual(self.assertOk(self.prep())["notebook_id"], NB)
+        self.assertFalse([a for a in self.argvs() if a[0] == "create"])
+
+    def test_unconfirmed_create_that_committed_is_adopted(self):
+        self.set_state(create="unconfirmed_committed")
+        body = self.assertOk(self.prep())
+        self.assertEqual((body["notebook_id"], body["task_id"]), (NB, TASK))
+        self.assertEqual(sum(a[0] == "create" for a in self.argvs()), 1)
+
+    def test_unconfirmed_create_not_listed_is_retryable_and_the_retry_lists_first(self):
+        self.set_state(create="unconfirmed")
+        self.assertTrue(self.assertError(self.prep(), "NLM_UNCONFIRMED")["retryable"])
+        self.set_state(create="unconfirmed_committed", notebooks=[TITLE])
+        self.assertOk(self.prep())
+        self.assertEqual(sum(a[0] == "create" for a in self.argvs()), 1, "the retry reused the notebook")
+
+    def test_two_notebooks_with_the_title_is_not_retryable(self):
+        self.set_state(notebooks=[TITLE, TITLE])
+        self.assertFalse(self.assertError(self.prep(), "NLM_UNCONFIRMED")["retryable"])
+        self.assertFalse([a for a in self.argvs() if a[0] == "create"])
 
     def test_rejected_source_is_reported_and_the_rest_continue(self):
         self.set_state(reject=["Case Study.pdf"])
