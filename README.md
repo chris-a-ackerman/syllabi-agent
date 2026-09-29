@@ -10,7 +10,8 @@ were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritim
 > **Status: V0 scaffold + implemented skills.** The instructions, schemas, trigger prompts and
 > tool contracts are in place. The `drive` skill script is still a stub (V4).
 > The `nlm` skill is implemented (SYL-94, a wrapper over the `notebooklm` CLI, tested against a
-> fake CLI; not yet run against NotebookLM). The `canvas` (SYL-93) and `syllabi` (SYL-96) skills
+> fake CLI, and run live on Maritime on 2026-09-29 through to a downloaded mp3; the Drive upload
+> waits for V4). The `canvas` (SYL-93) and `syllabi` (SYL-96) skills
 > are implemented and tested.
 > The `brief` skill is implemented and tested: the brief-writer input bundle under the
 > 40k-token cap, the reply validation (schema + fuzzy ≥ 0.9 hallucination filter) and the
@@ -156,8 +157,9 @@ Full contracts in [`docs/tool-contract.md`](docs/tool-contract.md).
   due, `canvas_course_id`), `GET /agent/course/:id`. Bearer agent token.
 - **`nlm-prep <course> <date> <pdf...> --topic "<topic>"`** (`workspace/skills/nlm/scripts/nlm.py
   prep`) is a thin wrapper over notebooklm-py's `notebooklm` CLI. It runs `auth check`, `create
-  --use`, `source add` for each PDF, and `generate audio --no-wait`, then returns
-  `{notebook_id, task_id}` at once. It refuses to start a second podcast when the prep-log
+  --use` (or reuses the session's notebook), `source add` for each PDF, `source wait` until
+  NotebookLM has processed them, and `generate audio --no-wait` (or reuses an audio overview
+  already started), then returns `{notebook_id, task_id}`. It refuses to start a second podcast when the prep-log
   already has a `notebook_id`.
   **`nlm-status <notebook_id> <task_id>`** runs `artifact poll` and returns
   `{status: pending|ready|failed, local_path, drive_url}`. When the audio is ready, it has
@@ -277,7 +279,6 @@ deploy. The full runbook is in [`docs/deploy-maritime.md`](docs/deploy-maritime.
 | new | Config persistence | `openclaw config patch` changes survive `maritime restart`; Maritime does not regenerate `openclaw.json`. |
 | new | Filesystem persistence | On restart Maritime logs "Captured derived image … Edits will survive restart", so installs outside `/data` should persist too. Confirm with the first V2 install. |
 
-Still to check: whether `python3` is 3.10+ (all the canvas skill needs is `python3`) and
-`pip install "notebooklm-py[headless]"` works on Maritime (the nlm skill needs the `notebooklm`
-CLI; `nlm.py check` tells you), whether `rclone` is available, and that an install survives a
-restart.
+Checked 2026-09-29: `python3` is 3.11 but has no `pip`; the nlm skill's `notebooklm` CLI goes in a
+venv at `/data/venvs/nlm` with `NLM_BIN` pointing at it (see the deploy runbook §7). Still to check:
+that the venv and the NotebookLM login survive `maritime restart`, and whether `rclone` is available.

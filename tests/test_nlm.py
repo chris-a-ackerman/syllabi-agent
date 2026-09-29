@@ -175,9 +175,13 @@ class PrepTests(NlmTestCase):
         self.assertEqual(argvs[2], ["create", TITLE, "--use", "--json"])
         self.assertEqual(argvs[3], ["source", "add", self.pdf1, "--title", "week4", "-n", NB, "--json"])
         self.assertEqual(argvs[4], ["source", "add", self.pdf2, "--title", "Case Study", "-n", NB, "--json"])
-        self.assertEqual(argvs[5][:2], ["generate", "audio"])
-        self.assertEqual(argvs[5][3:], ["-n", NB, "--no-wait", "--json"])
-        self.assertEqual(len(argvs), 6)
+        self.assertEqual([a[:2] for a in argvs[5:7]], [["source", "wait"]] * 2)
+        self.assertEqual(argvs[5][3:5], ["-n", NB])
+        self.assertEqual(argvs[5][-3:], ["--interval", "2", "--json"])
+        self.assertEqual(argvs[7], ["artifact", "list", "-n", NB, "--type", "audio", "--json"])
+        self.assertEqual(argvs[8][:2], ["generate", "audio"])
+        self.assertEqual(argvs[8][3:], ["-n", NB, "--no-wait", "--json"])
+        self.assertEqual(len(argvs), 9)
         self.assertEqual({c["home"] for c in self.calls()}, {self.home}, "NOTEBOOKLM_HOME is under DATA_DIR")
 
     def test_prompt_comes_from_the_skill_md_template_with_the_topic(self):
@@ -242,7 +246,7 @@ class PrepTests(NlmTestCase):
     def test_prep_resumes_after_a_failure_without_a_second_notebook(self):
         self.set_state(generate="rate_limited")
         self.assertTrue(self.assertError(self.prep(self.pdf1, self.pdf2), "NLM_RATE_LIMIT")["retryable"])
-        self.set_state()
+        self.set_state(notebooks=[TITLE])
         self.assertOk(self.prep(self.pdf1, self.pdf2))
         argvs = self.argvs()
         self.assertEqual(sum(a[0] == "create" for a in argvs), 1)
@@ -265,6 +269,50 @@ class PrepTests(NlmTestCase):
         self.set_state(create="unconfirmed_committed", notebooks=[TITLE])
         self.assertOk(self.prep())
         self.assertEqual(sum(a[0] == "create" for a in self.argvs()), 1, "the retry reused the notebook")
+
+    def test_sources_still_processing_time_out_and_the_rerun_resumes(self):
+        self.set_state(wait="timeout")
+        self.assertTrue(self.assertError(self.prep(), "NLM_TIMEOUT")["retryable"])
+        self.assertFalse(any(a[:2] == ["generate", "audio"] for a in self.argvs()), "no generate before ready")
+        self.set_state(notebooks=[TITLE])
+        self.assertEqual(self.assertOk(self.prep())["task_id"], TASK)
+        argvs = self.argvs()
+        self.assertEqual(sum(a[0] == "create" for a in argvs), 1)
+        self.assertEqual(sum(a[:2] == ["source", "add"] for a in argvs), 1, "the source is not re-added")
+
+    def test_source_that_fails_processing_is_reported_as_rejected(self):
+        self.set_state(wait="error")
+        self.assertError(self.prep(), "NLM_SOURCE_REJECTED")
+        self.assertFalse(any(a[:2] == ["generate", "audio"] for a in self.argvs()))
+
+    def test_deleted_notebook_is_not_found_on_resume(self):
+        self.set_state(generate="rate_limited")
+        self.assertError(self.prep(), "NLM_RATE_LIMIT")
+        self.set_state()                     # the notebook was deleted in NotebookLM
+        body = self.assertError(self.prep(), "NLM_NOT_FOUND")
+        self.assertFalse(body["retryable"])
+        self.assertEqual(sum(a[0] == "create" for a in self.argvs()), 1, "never silently re-created")
+
+    def test_existing_audio_overview_is_reused_not_regenerated(self):
+        self.set_state(audio=["completed"])
+        self.assertEqual(self.assertOk(self.prep())["task_id"], TASK)
+        self.assertFalse(any(a[:2] == ["generate", "audio"] for a in self.argvs()))
+
+    def test_unconfirmed_generate_that_started_is_adopted(self):
+        self.set_state(generate="unconfirmed_committed")
+        self.assertEqual(self.assertOk(self.prep())["task_id"], TASK)
+        self.assertEqual(sum(a[:2] == ["generate", "audio"] for a in self.argvs()), 1)
+
+    def test_unconfirmed_generate_not_listed_is_retryable_and_never_doubles(self):
+        self.set_state(generate="unconfirmed")
+        self.assertTrue(self.assertError(self.prep(), "NLM_UNCONFIRMED")["retryable"])
+        self.set_state(notebooks=[TITLE], audio=["in_progress"])   # it showed up after all
+        self.assertEqual(self.assertOk(self.prep())["task_id"], TASK)
+        self.assertEqual(sum(a[:2] == ["generate", "audio"] for a in self.argvs()), 1)
+
+    def test_two_audio_overviews_is_not_retryable(self):
+        self.set_state(audio=["completed", "in_progress"])
+        self.assertFalse(self.assertError(self.prep(), "NLM_UNCONFIRMED")["retryable"])
 
     def test_two_notebooks_with_the_title_is_not_retryable(self):
         self.set_state(notebooks=[TITLE, TITLE])

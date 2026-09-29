@@ -156,10 +156,10 @@ Auth is a master-token login for the dedicated agent account, or `NOTEBOOKLM_AUT
 
 | | |
 | --- | --- |
-| Steps | `auth check --test --json` → `list --json` (reuse a notebook already titled `<course_code> — <date>`) or `create "<course_code> — <date>" --use --json` → per PDF `source add <pdf> --title "<name>" -n <id> --json` → `generate audio "<prompt>" -n <id> --no-wait --json` |
+| Steps | `auth check --test --json` → `list --json` (reuse a notebook already titled `<course_code> — <date>`) or `create "<course_code> — <date>" --use --json` → per PDF `source add <pdf> --title "<name>" -n <id> --json` → per source `source wait <source_id> -n <id> --timeout <budget> --json` → `artifact list -n <id> --type audio --json` (reuse an audio overview already there) or `generate audio "<prompt>" -n <id> --no-wait --json` |
 | Prompt | template in the nlm `SKILL.md` ("…how they relate to `<session topic>`"). The topic travels as data inside one argv element: control characters are flattened and it is capped at 300 characters |
 | Output | `{notebook_id, task_id}`, plus `sources_rejected: [name]` when some PDFs were refused, plus `skipped: true` when the session already had a notebook (prep-log `notebook_id`, or this tool's job record `/data/work/nlm/<course>-<date>.json`). Nothing new is started in that case |
-| Resume | after a timeout or error mid-way, the next `prep` reuses the created notebook and skips PDFs already added. It never creates a second notebook |
+| Resume | after a timeout or error mid-way, the next `prep` checks the saved notebook still exists (`NLM_NOT_FOUND` if it was deleted), reuses it, skips PDFs already added or already ready, and reuses an audio overview already started. It never creates a second notebook or podcast |
 
 ### `nlm-status <notebook_id> <task_id> [--course C --date D]` (= `nlm.py status`)
 
@@ -186,9 +186,9 @@ Security rules the implementation enforces (SYL-94 Security):
 | `NLM_SOURCE_REJECTED` | every PDF refused (`VALIDATION_ERROR` on `source add`) | no | `partial` for the podcast |
 | `NLM_NOT_FOUND` | `NOT_FOUND` | no | ask Chris before clearing `notebook_id` |
 | `NLM_GENERATION_FAILED` | `GENERATION_FAILED` | no | `partial` |
-| `NLM_TIMEOUT` | the budget ran out mid-command | yes | next poll (`prep` resumes) |
+| `NLM_TIMEOUT` | the budget ran out mid-command, usually while the PDFs process | yes | `prep`: run it again now, up to twice more this run (it resumes); `status`: next poll |
 | `NLM_UNAVAILABLE` | `NETWORK_ERROR` and similar (retryable), or unexpected output / a CLI crash | see `retryable` | retry once, then `partial` |
-| `NLM_UNCONFIRMED` | `UNCONFIRMED_WRITE`: a write NotebookLM could not confirm, or two notebooks with the session's title | only for an unlisted create | `retryable`: prep again next poll; else `partial` and ask Chris (never a second podcast) |
+| `NLM_UNCONFIRMED` | `UNCONFIRMED_WRITE` on create or generate with nothing listed afterwards, or two notebooks with the session's title, or two audio overviews | only the first case | `retryable`: prep again; else `partial` and ask Chris (never a second podcast) |
 | `NLM_NOT_INSTALLED` | no `notebooklm` on `PATH` | no | tell Chris |
 | `USAGE` | bad arguments | no | a bug in the call |
 

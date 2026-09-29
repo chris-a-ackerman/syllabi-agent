@@ -17,7 +17,11 @@ each argv to $FAKE_NLM_LOG (one JSON line per call). Behaviour comes from $FAKE_
     secret     a string planted in auth details and stderr (must never reach nlm's output)
     notebooks  titles `list` returns (each gets NB_ID, or NB_ID2 for a repeat); default none
     create     "ok" | "unconfirmed" (UNCONFIRMED_WRITE, exit 1) | "unconfirmed_committed"
-               (UNCONFIRMED_WRITE, and the notebook shows up in `list` afterwards)
+               (UNCONFIRMED_WRITE, and the notebook shows up in `list` afterwards); a successful
+               create adds its title to `notebooks`
+    wait       `source wait` result: "ready" (default) | "timeout" (exit 2) | "error" | "not_found" (exit 1)
+    audio      statuses of the audio overviews `artifact list` returns; default none
+    generate   also "unconfirmed" | "unconfirmed_committed" (as for create; adds an audio overview)
 """
 import json
 import os
@@ -28,6 +32,12 @@ AUDIO = b"\x00\x00\x00\x18ftypM4A \x00\x00\x00\x00M4A mp42isom" + b"\x00" * 64
 NB_ID = "0a1b2c3d-4e5f-6789-abcd-ef0123456789"
 NB_ID2 = "1b2c3d4e-5f60-789a-bcde-f0123456789a"
 TASK_ID = "9f8e7d6c-5b4a-3210-fedc-ba9876543210"
+TASK_ID2 = "8e7d6c5b-4a32-10fe-dcba-9876543210fe"
+
+
+def save(state):
+    with open(os.environ["FAKE_NLM_STATE"], "w") as fh:
+        json.dump(state, fh)
 
 
 def out(obj, code=0):
@@ -88,10 +98,11 @@ def main():
         if state.get("create", "ok").startswith("unconfirmed"):
             if state["create"] == "unconfirmed_committed":
                 state.setdefault("notebooks", []).append(title)
-                with open(os.environ["FAKE_NLM_STATE"], "w") as fh:
-                    json.dump(state, fh)
+                save(state)
             out({"error": True, "code": "UNCONFIRMED_WRITE",
                  "message": "Error: this write could not be confirmed (network error)", "unconfirmed": True}, 1)
+        state.setdefault("notebooks", []).append(title)
+        save(state)
         data = {"notebook": {"id": NB_ID, "title": title, "role": "owner",
                              "created_at": "2026-09-28T19:00:00", "is_owner": True}}
         if "--use" in argv:
@@ -105,7 +116,22 @@ def main():
         n = len(open(os.environ["FAKE_NLM_LOG"]).read().splitlines())
         out({"source": {"id": "src-%d" % n, "title": opt(argv, "--title"), "type": "pdf", "url": None}})
 
+    if argv[:2] == ["source", "wait"]:
+        result = state.get("wait", "ready")
+        body = {"source_id": argv[2], "status": result}
+        out(body, {"ready": 0, "timeout": 2}.get(result, 1))
+
+    if argv[:2] == ["artifact", "list"]:
+        out({"artifacts": [{"id": TASK_ID if i == 0 else TASK_ID2, "title": "Deep dive", "type": "Audio",
+                            "status": st} for i, st in enumerate(state.get("audio", []))]})
+
     if argv[:2] == ["generate", "audio"]:
+        if state.get("generate", "").startswith("unconfirmed"):
+            if state["generate"] == "unconfirmed_committed":
+                state.setdefault("audio", []).append("in_progress")
+                save(state)
+            out({"error": True, "code": "UNCONFIRMED_WRITE",
+                 "message": "Error: this write could not be confirmed (network error)", "unconfirmed": True}, 1)
         if state.get("generate") == "rate_limited":
             out({"error": True, "code": "RATE_LIMITED", "message": "Audio generation rate limited by Google.",
                  "hint": "Daily quota may be exceeded."}, 1)

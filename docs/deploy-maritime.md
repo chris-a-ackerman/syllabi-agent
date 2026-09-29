@@ -97,25 +97,34 @@ Expected: `[]`. To undo: `cp /data/openclaw.json.pre-subagent ~/.openclaw/opencl
 
 ## 7. Still to do
 
-- Check the V2–V4 tooling: `python3`, `pip`, the `notebooklm` CLI, `rclone`, and whether installs
-  survive a restart. The nlm skill (SYL-94) needs notebooklm-py's `notebooklm` CLI on `PATH`
-  (Python 3.10+). In the agent chat:
+- Install the nlm skill's CLI (SYL-94; verified 2026-09-29 with notebooklm-py 0.8.3). The
+  container has Python 3.11 but no `pip`, so it goes in a venv on the volume. The install takes
+  longer than the 60 s command cap, so run it in the background and read the log:
   ```
-  Run: python3 --version && python3 -m pip install --user "notebooklm-py[headless]" && notebooklm --version
+  Run: nohup sh -c 'python3 -m venv --without-pip /data/venvs/nlm && curl -sSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py && /data/venvs/nlm/bin/python /tmp/get-pip.py && /data/venvs/nlm/bin/pip install "notebooklm-py[headless]" && /data/venvs/nlm/bin/notebooklm --version && echo INSTALL-DONE' > /data/nlm-install.txt 2>&1 &
+  Run: tail -20 /data/nlm-install.txt
   ```
+  Then, in the terminal: `maritime env set class-prep-repo NLM_BIN=/data/venvs/nlm/bin/notebooklm --no-secret --reload`.
 - NotebookLM auth (SYL-94 Security): use a **dedicated Google account for the agent** (e.g.
   `chris.classprep@gmail.com`), never your main Gmail. A master token can mint cookies for any
-  Google service on that account. Use the same account for Drive (V4). Log in once in the
-  container so the auth lands on the volume:
-  ```
-  NOTEBOOKLM_HOME=/data/notebooklm notebooklm login --master-token --account chris.classprep@gmail.com
-  ```
-  (Alternatively, set the Maritime secret `NOTEBOOKLM_AUTH_JSON`.) Then:
+  Google service on that account. Use the same account for Drive (V4).
+  1. As the agent account, open `https://notebooklm.google.com` in a browser once and accept the
+     terms. Until then `create` fails with `UNCONFIRMED_WRITE`.
+  2. In an incognito window, open `https://accounts.google.com/EmbeddedSetup`, sign in as the
+     agent account, and copy the `oauth_token` cookie (DevTools → Application → Cookies).
+  3. Terminal, straight away (the token is single-use and short-lived; the agent refuses a
+     command with a live token in the chat text, so it goes in as a secret):
+     ```
+     maritime env set class-prep-repo NLM_OAUTH_TOKEN='<token>' --reload
+     maritime chat class-prep-repo "Run: NOTEBOOKLM_HOME=/data/notebooklm /data/venvs/nlm/bin/notebooklm login --master-token --account chris.classprep@gmail.com --oauth-token \"\$NLM_OAUTH_TOKEN\" > /data/nlm-login.txt 2>&1; echo exit=\$?" --json
+     maritime env rm class-prep-repo NLM_OAUTH_TOKEN
+     ```
+  Then:
   ```
   Run: python3 /data/syllabi-agent/workspace/skills/nlm/scripts/nlm.py check
   ```
   `check` must print `{"status": "ok", ...}`. `{"error": "NLM_AUTH"}` means the login is missing or
-  stale. `NLM_NOT_INSTALLED` means `notebooklm` isn't on `PATH`. `nlm.py` keeps
+  stale. `NLM_NOT_INSTALLED` means `NLM_BIN` doesn't point at the CLI. `nlm.py` keeps
   `/data/notebooklm` at mode 700 and its credential files at 600.
 - Done when (V3, live): `nlm.py prep MAS.665 <date> /data/readings/MAS.665/<date>/<file>.pdf --topic "<topic>"`
   returns `{notebook_id, task_id}`. A few minutes later, `nlm.py status <notebook_id> <task_id>`

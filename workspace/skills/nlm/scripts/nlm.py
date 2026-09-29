@@ -19,11 +19,15 @@ Prints exactly one JSON object on stdout:
 
 `prep`:
     1. `notebooklm auth check --test --json`; AUTH_REQUIRED / status "error" -> {"error": "NLM_AUTH"}
-    2. `notebooklm create "<course_code> — <date>" --use --json` -> notebook id
+    2. `notebooklm list --json`: reuse a notebook already titled "<course_code> — <date>" (or, when
+       resuming, check the saved one still exists); else `notebooklm create ... --use --json`
     3. per PDF: `notebooklm source add <pdf> --title "<name>" -n <id> --json`
-    4. `notebooklm generate audio "<prompt>" -n <id> --no-wait --json` -> task id
+    4. per source: `notebooklm source wait <source_id> -n <id> --timeout <budget> --json`
+       (NotebookLM refuses to generate from a source that is still processing)
+    5. `notebooklm artifact list -n <id> --type audio --json`: reuse an audio overview already
+       there; else `notebooklm generate audio "<prompt>" -n <id> --no-wait --json` -> task id
        (the prompt template lives in SKILL.md; the session topic goes in as data, one argv element)
-    5. returns {notebook_id, task_id} at once.
+    6. returns {notebook_id, task_id}. Anything cut short by the budget resumes on the next run.
 `status`:
     `notebooklm artifact poll <task_id> -n <id> --json`; when completed:
     `notebooklm download audio /data/podcasts/<course>-<date>.mp3 -n <id> --latest --json`, then the
@@ -57,6 +61,7 @@ import time
 
 DEFAULT_DEADLINE = 50.0          # seconds; Maritime caps a shell command at 60 s
 DRIVE_MIN_BUDGET = 15.0          # below this, leave the upload for the next poll
+WAIT_RESERVE = 12.0              # kept back from `source wait` for the audio check and generate
 DEFAULT_DRIVE_DIR = "Podcasts"
 TOPIC_MAX = 300
 PROMPT_START = "<!-- nlm:prompt:start -->"
@@ -337,16 +342,27 @@ def _str_field(obj, *keys):
     return obj if isinstance(obj, str) and obj else None
 
 
-def nlm_find_notebooks(cfg, title):
-    """Ids of the notebooks titled exactly `title` (`notebooklm list --json`)."""
+def nlm_list_notebooks(cfg):
+    """{id: title} for every notebook (`notebooklm list --json`)."""
     rc, obj = run_notebooklm(cfg, ["list", "--json"], "list notebooks")
     raise_for_cli_error(rc, obj, "list notebooks")
     notebooks = obj.get("notebooks")
     if not isinstance(notebooks, list):
         raise NlmError("NLM_UNAVAILABLE", "list notebooks: no notebook list in the CLI output", retryable=True)
-    return [nb["id"] for nb in notebooks
-            if isinstance(nb, dict) and nb.get("title") == title
-            and isinstance(nb.get("id"), str) and _ID_RE.match(nb["id"])]
+    return {nb["id"]: nb.get("title") for nb in notebooks
+            if isinstance(nb, dict) and isinstance(nb.get("id"), str) and _ID_RE.match(nb["id"])}
+
+
+def nlm_find_notebooks(cfg, title):
+    """Ids of the notebooks titled exactly `title`."""
+    return [nb_id for nb_id, nb_title in nlm_list_notebooks(cfg).items() if nb_title == title]
+
+
+def nlm_require_notebook(cfg, notebook_id, job_path):
+    """A resumed prep's notebook must still exist; a deleted one is never silently replaced."""
+    if notebook_id not in nlm_list_notebooks(cfg):
+        raise NlmError("NLM_NOT_FOUND", "notebook %s from the saved prep job no longer exists in NotebookLM; "
+                       "ask Chris, then delete %s to start this session over" % (notebook_id, job_path))
 
 
 def nlm_existing_notebook(cfg, title):
@@ -398,6 +414,61 @@ def nlm_generate_audio(cfg, notebook_id, prompt):
     if not task_id or not _ID_RE.match(task_id):
         raise NlmError("NLM_UNAVAILABLE", "generate audio: no task id in the CLI output", retryable=True)
     return task_id
+
+
+def nlm_source_wait(cfg, notebook_id, source_id):
+    """Wait, within the budget, for a source to finish processing -> "ready" | "error"."""
+    budget = int(cfg.remaining() - WAIT_RESERVE)
+    if budget < 1:
+        raise NlmError("NLM_TIMEOUT", "no time left to wait for the sources; run prep again (it resumes)",
+                       retryable=True)
+    rc, obj = run_notebooklm(cfg, ["source", "wait", source_id, "-n", notebook_id, "--timeout", str(budget),
+                                   "--interval", "2", "--json"], "source wait")
+    state = obj.get("status")
+    if state in ("ready", "error"):
+        return state
+    if state == "timeout":
+        raise NlmError("NLM_TIMEOUT", "NotebookLM is still processing the sources; run prep again (it resumes)",
+                       retryable=True)
+    if state == "not_found":
+        raise NlmError("NLM_NOT_FOUND", "source %s is no longer in notebook %s" % (source_id, notebook_id))
+    raise_for_cli_error(rc, obj, "source wait")
+    raise NlmError("NLM_UNAVAILABLE", "source wait: no status in the CLI output", retryable=True)
+
+
+def nlm_existing_audio(cfg, notebook_id):
+    """The notebook's one audio overview that hasn't failed, or None."""
+    rc, obj = run_notebooklm(cfg, ["artifact", "list", "-n", notebook_id, "--type", "audio", "--json"],
+                             "artifact list")
+    raise_for_cli_error(rc, obj, "artifact list")
+    artifacts = obj.get("artifacts")
+    if not isinstance(artifacts, list):
+        raise NlmError("NLM_UNAVAILABLE", "artifact list: no artifact list in the CLI output", retryable=True)
+    live = [a["id"] for a in artifacts if isinstance(a, dict) and a.get("status") != "failed"
+            and isinstance(a.get("id"), str) and _ID_RE.match(a["id"])]
+    if len(live) > 1:
+        raise NlmError("NLM_UNCONFIRMED", "notebook %s already has %d audio overviews; ask Chris which to keep"
+                       % (notebook_id, len(live)))
+    return live[0] if live else None
+
+
+def nlm_start_audio(cfg, notebook_id, prompt):
+    """Start the audio overview, or adopt the one already there (the task id is the artifact id)."""
+    existing = nlm_existing_audio(cfg, notebook_id)
+    if existing:
+        cfg.log("generate: notebook %s already has audio %s; reusing it" % (notebook_id, existing))
+        return existing
+    try:
+        return nlm_generate_audio(cfg, notebook_id, prompt)
+    except NlmError as e:
+        if e.code != "NLM_UNCONFIRMED":
+            raise
+        existing = nlm_existing_audio(cfg, notebook_id)
+        if existing:
+            return existing
+        # Not listed: it never started. The next prep checks the list again before generating.
+        raise NlmError("NLM_UNCONFIRMED", "generate audio could not be confirmed and no audio overview is "
+                       "listed; run prep again (it checks before generating)", retryable=True)
 
 
 def nlm_poll(cfg, notebook_id, task_id):
@@ -537,7 +608,9 @@ def cmd_prep(cfg, args):
     auth_check(cfg)
 
     job.update({"course": course, "date": date})
-    if not job.get("notebook_id"):
+    if job.get("notebook_id"):
+        nlm_require_notebook(cfg, job["notebook_id"], _job_path(cfg, course, date))
+    else:
         job["notebook_id"] = nlm_create(cfg, notebook_title(course, date))
         job["sources"] = []
         save_job(cfg, course, date, job)       # a timeout from here on resumes, never re-creates
@@ -545,21 +618,36 @@ def cmd_prep(cfg, args):
 
     rejected = []
     for pdf in pdfs:
-        if pdf in job.get("sources", []):
+        if pdf in job.get("sources", []) or pdf in job.get("failed_sources", []):
             continue
         try:
-            nlm_source_add(cfg, notebook_id, pdf)
+            source_id = nlm_source_add(cfg, notebook_id, pdf)
         except NlmError as e:
             if e.code != "NLM_SOURCE_REJECTED":
                 raise
             rejected.append(os.path.basename(pdf))
             continue
         job.setdefault("sources", []).append(pdf)
+        if source_id:
+            job.setdefault("source_ids", {})[pdf] = source_id
+        save_job(cfg, course, date, job)
+
+    # NotebookLM won't generate from a source that is still processing.
+    for pdf in list(job.get("sources", [])):
+        source_id = job.get("source_ids", {}).get(pdf)
+        if not source_id or source_id in job.get("ready_sources", []):
+            continue
+        if nlm_source_wait(cfg, notebook_id, source_id) == "ready":
+            job.setdefault("ready_sources", []).append(source_id)
+        else:
+            job["sources"].remove(pdf)
+            job.setdefault("failed_sources", []).append(pdf)
+            rejected.append(os.path.basename(pdf))
         save_job(cfg, course, date, job)
     if not job.get("sources"):
         raise NlmError("NLM_SOURCE_REJECTED", "NotebookLM rejected every source; nothing to make a podcast from")
 
-    job["task_id"] = nlm_generate_audio(cfg, notebook_id, prompt)
+    job["task_id"] = nlm_start_audio(cfg, notebook_id, prompt)
     save_job(cfg, course, date, job)
     result = {"notebook_id": notebook_id, "task_id": job["task_id"]}
     if rejected:
