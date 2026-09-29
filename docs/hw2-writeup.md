@@ -14,7 +14,10 @@ MIT AI Studio (MAS.665). Plan of record: [`README.md`](../README.md).
 ## 2. Memory
 
 <!-- /data/memory/prep-log.json (schema, state machine, never-redo guarantees) and course-notes.md.
-     Show a before/after record from a real run. -->
+     Show a before/after record from a real run.
+     Implementation: workspace/skills/preplog (SYL-100, memory half): schema-validated atomic writes; guards
+     ALREADY_HAS_NOTEBOOK / ALREADY_SENT / MAX_ATTEMPTS; `plan.steps` never lists a recorded step;
+     `due` computes the send pass. Evidence: tests/test_preplog.py, and a real prep-log.json excerpt. -->
 
 ## 3. Agent loop
 
@@ -26,7 +29,14 @@ MIT AI Studio (MAS.665). Plan of record: [`README.md`](../README.md).
 ## 4. Subagent
 
 <!-- brief-writer: bounded context (~40k tokens), no tools, strict JSON, schema validation,
-     the fuzzy ≥ 0.9 check against Canvas text, re-prompt once then partial. Hallucination log examples. -->
+     the fuzzy ≥ 0.9 check against Canvas text, re-prompt once then partial. Hallucination log examples.
+     Implementation: workspace/skills/brief (SYL-96): `bundle` (cap, even split, truncation notes,
+     sidecar with the Canvas text), `validate` (JSON extraction, schema subset, difflib ratio vs whole
+     Canvas sentences/lines with exact numbers/negations/content words, HALLUCINATION lines, reprompt
+     on attempt 1 / partial on attempt 2), `format` (Telegram text, drafts marked); workspace/skills/
+     pdf-text (PDF → text for the bundle). Evidence so far: tests/test_brief.py (the forged
+     "### CANVAS:" / "---" tests are the injection cases; FuzzyMatchTests are planted near-miss
+     questions). A brief-validation.json from a live run is still to be captured. -->
 
 ## 5. Failure recovery
 

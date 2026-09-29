@@ -17,7 +17,8 @@
   },
   "$defs": {
     "status": {
-      "enum": ["pending", "podcast-pending", "ready", "done", "partial", "needs-human"]
+      "enum": ["pending", "podcast-pending", "ready", "notified-partial", "done", "partial", "needs-human"],
+      "description": "Matches V8. notified-partial: the brief was sent without the podcast link (brief_sent_at set, podcast_sent_at unset); only the podcast-ready message is still owed, then done."
     },
     "trigger": {
       "enum": ["prep", "poll", "notify", "human", "manual"],
@@ -97,7 +98,11 @@
           "type": "string",
           "description": "Set by nlm-prep. If present, NEVER start another podcast for this session."
         },
-        "podcast_url": { "type": "string", "description": "Drive share link to the mp3, set by nlm-status when ready." },
+        "task_id": {
+          "type": "string",
+          "description": "Set by nlm-prep alongside notebook_id: the audio generation task that nlm-status polls."
+        },
+        "podcast_url": { "type": "string", "description": "Drive link to the mp3 (nlm-status drive_url), set when ready." },
         "brief": { "$ref": "brief.schema.json" },
         "notify_at": {
           "type": "string",
