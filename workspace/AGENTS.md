@@ -55,7 +55,7 @@ The only reasons to contact Chris are the four cases in "Ask a human". Never wri
 | Scratch (extracted text, brief I/O) | `/data/work/<course>/<YYYY-MM-DD>/` |
 | NotebookLM auth (`NOTEBOOKLM_HOME`) | `/data/notebooklm/` (master-token login of the dedicated agent account; files chmod 600) |
 | rclone config | `/data/rclone/rclone.conf` |
-| Drive layout | `Readings/<course>/<YYYY-MM-DD>/` |
+| Drive layout | `ClassPrep/Readings/<course>/<YYYY-MM-DD>/`, `ClassPrep/Podcasts/<course>-<YYYY-MM-DD>.mp3` |
 | Repo checkout | `/data/syllabi-agent` (`skills/`, `agents/`, `memory-templates/` here are symlinks into it) |
 | Memory tool | `skills/preplog/scripts/preplog` (see `skills/preplog/SKILL.md`): **every read and write** of the prep-log, the run log and course-notes goes through it, never through a text editor or ad-hoc JSON edits |
 
@@ -96,7 +96,13 @@ Each skill's `SKILL.md` lists its commands and error codes (the full contract is
   already downloaded `/data/podcasts/<course>-<date>.mp3` and run `drive-put`. `pending` with a
   `local_path` means the upload is still to do: call it again on the next poll.
   `nlm.py check` is the auth smoke test. Auth failure is exactly `{"error": "NLM_AUTH"}`.
-- **drive** skill: `drive-put` (idempotent upload, returns a share link).
+- **drive** skill (Google Drive via rclone): `skills/drive/scripts/drive-put <local_path> Readings/<course>/<date>`
+  copies one file under `/data/` to `ClassPrep/Readings/<course>/<date>/` and returns
+  `{drive_path, web_url, uploaded}` (podcasts: `drive-put <mp3> Podcasts <course>-<date>.mp3`).
+  Idempotent: a file already there with the same size and MD5 is not sent again and gets the same
+  URL, so calling it twice is safe. It never deletes anything and never makes a public link.
+  `DRIVE_AUTH` means rclone needs re-authorizing (tell Chris once, keep the local files, carry on);
+  `DRIVE_NET` is retryable. `python3 skills/drive/scripts/drive.py check` is the config smoke test.
 - **Telegram**: when a cron job is running, nobody messaged you, so a normal reply goes nowhere.
   Send with `maritime-telegram-send "text"` (or `printf '%s' "$msg" | maritime-telegram-send -`
   for multi-line text). It works only when `MARITIME_TELEGRAM_CONNECTED=1`. When Chris messages
@@ -169,8 +175,11 @@ each session it returns:
    external links: download them if they are public. If one is behind a login or returns 403,
    ask a human (condition 1). On `CANVAS_403`, fall back to the syllabus link if there is one.
    Otherwise treat it as condition 1.
-5. **Drive.** Run `drive-put` for each local file to `Readings/<course>/<date>/`. Record the
-   `drive_paths[]`.
+5. **Drive.** Run `drive-put <file> Readings/<course>/<date>` for each local file (it lands in
+   `ClassPrep/Readings/<course>/<date>/`). Record each `drive_path` in `drive_paths[]` and keep the
+   `web_url` for the brief. `uploaded: false` means it was already there: fine. On
+   `DRIVE_AUTH`, keep the local files, set `partial` with `last_error` (step `drive`), tell
+   Chris once that rclone needs reconnecting, and keep going with the other steps.
 6. **Podcast.** If there is no `notebook_id`, run `nlm-prep` with the PDFs and the session
    topic. Record `notebook_id` and `task_id`, and set status `podcast-pending`. On `NLM_AUTH`,
    retry once. If it fails again, set `partial`, record `last_error`, and ask a human

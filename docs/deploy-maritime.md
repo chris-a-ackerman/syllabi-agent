@@ -106,7 +106,7 @@ Expected: `[]`. To undo: `cp /data/openclaw.json.pre-subagent ~/.openclaw/opencl
   ```
   Then, in the terminal: `maritime env set class-prep-repo NLM_BIN=/data/venvs/nlm/bin/notebooklm --no-secret --reload`.
 - NotebookLM auth (SYL-94 Security): use a **dedicated Google account for the agent** (e.g.
-  `chris.classprep@gmail.com`), never your main Gmail. A master token can mint cookies for any
+  `syllabi382@gmail.com`), never your main Gmail. A master token can mint cookies for any
   Google service on that account. Use the same account for Drive (V4).
   1. As the agent account, open `https://notebooklm.google.com` in a browser once and accept the
      terms. Until then `create` fails with `UNCONFIRMED_WRITE`.
@@ -116,7 +116,7 @@ Expected: `[]`. To undo: `cp /data/openclaw.json.pre-subagent ~/.openclaw/opencl
      command with a live token in the chat text, so it goes in as a secret):
      ```
      maritime env set class-prep-repo NLM_OAUTH_TOKEN='<token>' --reload
-     maritime chat class-prep-repo "Run: NOTEBOOKLM_HOME=/data/notebooklm /data/venvs/nlm/bin/notebooklm login --master-token --account chris.classprep@gmail.com --oauth-token \"\$NLM_OAUTH_TOKEN\" > /data/nlm-login.txt 2>&1; echo exit=\$?" --json
+     maritime chat class-prep-repo "Run: NOTEBOOKLM_HOME=/data/notebooklm /data/venvs/nlm/bin/notebooklm login --master-token --account syllabi382@gmail.com --oauth-token \"\$NLM_OAUTH_TOKEN\" > /data/nlm-login.txt 2>&1; echo exit=\$?" --json
      maritime env rm class-prep-repo NLM_OAUTH_TOKEN
      ```
   Then:
@@ -137,8 +137,83 @@ Expected: `[]`. To undo: `cp /data/openclaw.json.pre-subagent ~/.openclaw/opencl
   Run: python3 /data/syllabi-agent/workspace/skills/canvas/scripts/canvas.py whoami
   Run: python3 /data/syllabi-agent/workspace/skills/canvas/scripts/canvas.py modules 40577
   ```
-- Upload the rclone config to `/data/rclone/` and set the environment variables with
+- Install rclone for the drive skill (SYL-95). In the agent chat:
+  ```
+  Run: rclone version
+  ```
+  If it is missing, put a static build on the volume (pick `arm64` if `uname -m` says `aarch64`).
+  The download can take longer than the 60 s command cap, and a cut-off download leaves a binary
+  that dies with `Segmentation fault` (exit 139; `drive.py check` then reports `DRIVE_NET`,
+  "rclone exit -11"). So run it in the background, and only copy the binary into `/data/bin/`
+  once it has started (checked 2026-09-29 with rclone v1.75.1 on x86_64):
+  ```
+  Run: rm -rf /data/rc && mkdir -p /data/rc /data/bin && cd /data/rc && nohup sh -c 'curl -fsSL https://downloads.rclone.org/rclone-current-linux-amd64.zip -o rclone.zip && python3 -m zipfile -e rclone.zip x && chmod +x x/*/rclone && x/*/rclone version && cp x/*/rclone /data/bin/rclone && /data/bin/rclone version && echo INSTALL-DONE' > /data/rclone-install.txt 2>&1 &
+  Run: tail -5 /data/rclone-install.txt
+  ```
+  Wait for `INSTALL-DONE` (re-run the `tail`), then `Run: rm -rf /data/rc`. If the log shows
+  `Segmentation fault`, re-run the install. Then, in the terminal:
+  `maritime env set class-prep-repo DRIVE_RCLONE_BIN=/data/bin/rclone --no-secret --reload`. Then, with
+  `/data/rclone/rclone.conf` uploaded (next bullet):
+  ```
+  Run: python3 /data/syllabi-agent/workspace/skills/drive/scripts/drive.py check
+  ```
+  `check` must print `{"ok": true, "root": "gdrive:ClassPrep", ...}`. `DRIVE_AUTH` means the
+  config file is missing, not `chmod 600`, or its token is stale; `DRIVE_NOT_INSTALLED` means
+  rclone was not found. Then one real upload, twice:
+  `Run: /data/syllabi-agent/workspace/skills/drive/scripts/drive-put /data/readings/MAS.665/<date>/<file>.pdf Readings/MAS.665/<date>`.
+  The first run says `uploaded: true`; open its `web_url` on the iPad; the second run must say
+  `uploaded: false` with the same URL and transfer nothing. Restart the agent and re-run `check`
+  to confirm the install survived.
+- Upload secrets to `/data/secrets/` and `/data/rclone/`, and set the environment variables with
   `maritime env set` (see `.env.example`).
+- **Drive identity and rclone config (SYL-95 Security).** rclone runs as the **dedicated agent
+  Google account** (the one from V3), never Chris's main account, with `scope = drive.file`, so
+  the agent can only see and change files it created itself. It uses its **own OAuth client**:
+  rclone's shared client_id is being retired during 2026 (`rclone config` warns about it). The
+  container has no browser, so the token is made on the laptop and goes in as a secret
+  (verified 2026-09-29 with rclone v1.75.1):
+  1. **Google Cloud project.** At https://console.cloud.google.com, signed in as the agent
+     account (`syllabi382@gmail.com`), create a project (e.g. `syllabi-agent`), then
+     *APIs & Services → Library → Google Drive API → Enable*.
+  2. **Consent screen.** *Google Auth Platform* (or *OAuth consent screen*) → *Get started*: app
+     name `syllabi-agent`, support and contact email the agent account, audience **External**.
+     Then *Audience → Publish app*, so the status is **In production**. Don't skip this: in
+     "Testing" the sign-in fails with `Error 403: access_denied` ("has not completed the Google
+     verification process") and a test user's token expires after 7 days. `drive.file` is a
+     non-sensitive scope, so publishing needs no Google review.
+  3. **Client.** *Clients → Create client → Desktop app*, name `rclone`. Keep the client ID and
+     client secret.
+  4. **Token, on the laptop** (`brew install rclone`): `rclone config` → `n`, name `gdrive`,
+     storage `drive`, paste the client_id and client_secret, scope **`drive.file`**, no advanced
+     config, auto config `y`. Sign in as the agent account; on "Google hasn't verified this app"
+     click *Advanced → Go to syllabi-agent*. No shared drive, keep the remote. Then
+     `cat ~/.config/rclone/rclone.conf`: you need `client_id`, `client_secret` and the whole
+     `token = {...}` JSON (access and refresh token together).
+  5. **Write `/data/rclone/rclone.conf` through secret env vars** (never paste the token or the
+     client secret into the chat, and never commit the file). In the terminal:
+     ```
+     maritime env set class-prep-repo RCLONE_TOKEN='<token JSON>' --reload
+     maritime env set class-prep-repo RCLONE_CLIENT_SECRET='<client secret>' --reload
+     maritime chat class-prep-repo "Run: mkdir -p /data/rclone && printf '[gdrive]\ntype = drive\nclient_id = %s\nclient_secret = %s\nscope = drive.file\ntoken = %s\n' '<client id>' \"\$RCLONE_CLIENT_SECRET\" \"\$RCLONE_TOKEN\" > /data/rclone/rclone.conf && chmod 600 /data/rclone/rclone.conf && ls -l /data/rclone/rclone.conf"
+     maritime env rm class-prep-repo RCLONE_TOKEN
+     maritime env rm class-prep-repo RCLONE_CLIENT_SECRET
+     ```
+     `ls` must show `-rw-------`. The drive skill refuses to run (`DRIVE_AUTH`, "chmod 600")
+     while the file is readable by group or others: it holds a refresh token. rclone refreshes
+     the access token itself and rewrites the file.
+     To reconnect later (`DRIVE_AUTH`, token expired or revoked): `rclone config reconnect gdrive:`
+     on the laptop, then repeat this step with the new token.
+  6. Let the agent create the folder: the first `drive-put` makes `ClassPrep/` (with `drive.file`,
+     a folder you make by hand is invisible to the agent and uploads into it fail with
+     `DRIVE_AUTH` / `insufficientFilePermissions`).
+  7. From the **agent account** in drive.google.com, share `ClassPrep` with Chris's main account
+     by email (Viewer or Editor), **not** "anyone with the link". It shows up under *Shared with
+     me* in the iPad Files app and in Goodnotes' "Import from Google Drive"; `web_url` links open
+     on the phone because it is signed in to the main account.
+  Layout: `ClassPrep/Readings/<course>/<YYYY-MM-DD>/*.pdf` and
+  `ClassPrep/Podcasts/<course>-<YYYY-MM-DD>.mp3`. The skill never runs `rclone link`, so no file is
+  ever reachable without a Google login. Fallback if Drive is down: send PDFs as Telegram
+  attachments (100 MB cap).
 - Smoke-test the brief skill (agent chat):
   `Run: python3 /data/syllabi-agent/workspace/skills/brief/scripts/brief.py prompt` (expect the
   brief-writer prompt, read from the workspace's `agents/brief-writer.md`), then

@@ -46,11 +46,11 @@ You don't need Chromium with master-token auth.
 **Auth (production): master token for a dedicated agent account.** A master token is a *Google
 account* master credential. It can mint cookies for Google services in general, not only for
 NotebookLM, so **never use Chris's main Gmail**. Use the dedicated agent account (e.g.
-`chris.classprep@gmail.com`), which is also the Drive account (V4). Log in once:
+`syllabi382@gmail.com`), which is also the Drive account (V4). Log in once:
 
 ```sh
 NOTEBOOKLM_HOME=/data/notebooklm /data/venvs/nlm/bin/notebooklm login --master-token \
-  --account chris.classprep@gmail.com --oauth-token "$NLM_OAUTH_TOKEN"
+  --account syllabi382@gmail.com --oauth-token "$NLM_OAUTH_TOKEN"
 ```
 
 The container has no browser, so pass the single-use `oauth_token` yourself. First, as the agent

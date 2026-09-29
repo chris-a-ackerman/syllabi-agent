@@ -8,10 +8,12 @@ persistent volume, running two install scripts, and adding one Maritime wake tri
 were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritime.md).
 
 > **Status: V0 scaffold + implemented skills.** The instructions, schemas, trigger prompts and
-> tool contracts are in place. The `drive` skill script is still a stub (V4).
+> tool contracts are in place. The `drive` skill is implemented (SYL-95, a CLI over rclone,
+> tested against a fake rclone, and run live on Maritime on 2026-09-29: upload, re-upload with no
+> transfer, sharing to the iPad, the refusal cases and a restart).
 > The `nlm` skill is implemented (SYL-94, a wrapper over the `notebooklm` CLI, tested against a
-> fake CLI, and run live on Maritime on 2026-09-29 through to a downloaded mp3; the Drive upload
-> waits for V4). The `canvas` (SYL-93) and `syllabi` (SYL-96) skills
+> fake CLI, and run live on Maritime on 2026-09-29 through to a downloaded mp3; the live Drive upload
+> is still to test). The `canvas` (SYL-93) and `syllabi` (SYL-96) skills
 > are implemented and tested.
 > The `brief` skill is implemented and tested: the brief-writer input bundle under the
 > 40k-token cap, the reply validation (schema + fuzzy ≥ 0.9 hallucination filter) and the
@@ -46,7 +48,9 @@ were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritim
 │   │   ├── nlm/
 │   │   │   ├── SKILL.md          ← NotebookLM podcasts: prep / status / check, errors, agent rules
 │   │   │   └── scripts/nlm.py    ← wrapper over the notebooklm CLI; nlm-prep and nlm-status are symlinks to it
-│   │   ├── drive/SKILL.md        ← drive-put via rclone (stub)
+│   │   ├── drive/
+│   │   │   ├── SKILL.md          ← Google Drive uploads: put / ls / check, errors, agent rules
+│   │   │   └── scripts/drive.py  ← the CLI over rclone; drive-put is a symlink to it
 │   │   ├── brief/                ← brief-writer pipeline: bundle, validate, format (SYL-96)
 │   │   │   ├── SKILL.md
 │   │   │   └── scripts/brief.py    (+ `brief` symlink)
@@ -70,6 +74,7 @@ were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritim
 │   ├── tool-contract.md          ← every tool: name, inputs, outputs, error shape
 │   └── hw2-writeup.md            ← HW2 writeup skeleton (one heading per rubric item)
 ├── tests/
+│   ├── test_drive.py             ← drive skill tests, no network
 │   ├── test_nlm.py               ← nlm skill tests, no network: python3 -m unittest discover -s tests
 │   ├── test_syllabi.py           ← syllabi skill tests, no network
 │   ├── test_brief.py             ← unit tests for the brief skill (no network)
@@ -167,8 +172,16 @@ Full contracts in [`docs/tool-contract.md`](docs/tool-contract.md).
   the auth smoke test. Auth is a master-token login of a dedicated agent Google account, stored
   in `/data/notebooklm/` (chmod 600). A stale or missing session returns exactly
   `{"error": "NLM_AUTH"}`.
-- **`drive-put <local_path> <remote_dir>`** returns a share link, via rclone. Config is at
-  `/data/rclone/rclone.conf`. Idempotent.
+- **`drive-put <local_path> <remote_dir> [<remote_name>]`** (`workspace/skills/drive/scripts/drive.py put`)
+  copies one file under `/data/` to `ClassPrep/Readings/<course>/<date>/` (or
+  `ClassPrep/Podcasts/<course>-<date>.mp3`) with rclone and returns `{drive_path, web_url, uploaded}`,
+  where `web_url` is the file's normal Drive URL. It never creates link sharing (`rclone link` is
+  never run): the files open only for the account `ClassPrep` is shared with. Idempotent: a file
+  already there with the same size and MD5 is not sent again and gets the same URL. rclone runs as
+  a dedicated agent Google account with `scope = drive.file`; the config at
+  `/data/rclone/rclone.conf` must be `chmod 600` and its values are scrubbed from every output line.
+  Errors: `DRIVE_AUTH` (token or permissions), `DRIVE_NET` (network, retryable). `drive.py ls`
+  lists a folder; `drive.py check` is the config smoke test.
 - **Telegram** (Maritime channel) for briefs and questions, sent with `maritime-telegram-send`.
 
 ### Memory (rubric 2): read at the start of every run, written at the end
@@ -281,5 +294,6 @@ deploy. The full runbook is in [`docs/deploy-maritime.md`](docs/deploy-maritime.
 
 Checked 2026-09-29: `python3` is 3.11 but has no `pip`; the nlm skill's `notebooklm` CLI goes in a
 venv at `/data/venvs/nlm` with `NLM_BIN` pointing at it (see the deploy runbook §7). The venv,
-`NLM_BIN` and the NotebookLM login survive `maritime restart` (checked the same day). Still to
-check: whether `rclone` is available.
+`NLM_BIN` and the NotebookLM login survive `maritime restart` (checked the same day). rclone
+v1.75.1 runs from `/data/bin/rclone` (`DRIVE_RCLONE_BIN`), and it and the Drive config survive
+`maritime restart` (checked 2026-09-29).
