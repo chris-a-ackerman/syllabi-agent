@@ -1,0 +1,167 @@
+#!/usr/bin/env python3
+"""A fake `notebooklm` CLI for tests/test_nlm.py.
+
+It prints what notebooklm-py 0.8.3's CLI prints under `--json` for the commands nlm.py runs
+(shapes taken from src/notebooklm/cli/*.py and docs/cli-exit-codes.md upstream), and records
+each argv to $FAKE_NLM_LOG (one JSON line per call). Behaviour comes from $FAKE_NLM_STATE:
+
+    auth       "ok" | "stale" (auth check: status "error", token_fetch false, exit 1)
+               | "missing" (auth check: storage_exists false, exit 1)
+               | "auth_required" (every command: {"error": true, "code": "AUTH_REQUIRED"}, exit 1)
+               | "expired" (auth check passes; every later call: AUTH_ERROR, exit 1)
+    reject     basenames that `source add` refuses (VALIDATION_ERROR)
+    generate   "ok" | "rate_limited"
+    poll       "pending" | "in_progress" | "completed" | "failed" | "not_found"
+    crash      a command name that dies with a traceback and no JSON (exit 2)
+    sleep      seconds to sleep before answering
+    secret     a string planted in auth details and stderr (must never reach nlm's output)
+    notebooks  titles `list` returns (each gets NB_ID, or NB_ID2 for a repeat); default none
+    create     "ok" | "unconfirmed" (UNCONFIRMED_WRITE, exit 1) | "unconfirmed_committed"
+               (UNCONFIRMED_WRITE, and the notebook shows up in `list` afterwards); a successful
+               create adds its title to `notebooks`
+    wait       `source wait` result: "ready" (default) | "timeout" (exit 2) | "error" | "not_found" (exit 1)
+    audio      statuses of the audio overviews `artifact list` returns; default none
+    generate   also "unconfirmed" | "unconfirmed_committed" (as for create; adds an audio overview)
+               | "rate_limited_started" (RATE_LIMITED, yet the audio overview appears)
+"""
+import json
+import os
+import sys
+import time
+
+AUDIO = b"\x00\x00\x00\x18ftypM4A \x00\x00\x00\x00M4A mp42isom" + b"\x00" * 64
+NB_ID = "0a1b2c3d-4e5f-6789-abcd-ef0123456789"
+NB_ID2 = "1b2c3d4e-5f60-789a-bcde-f0123456789a"
+TASK_ID = "9f8e7d6c-5b4a-3210-fedc-ba9876543210"
+TASK_ID2 = "8e7d6c5b-4a32-10fe-dcba-9876543210fe"
+
+
+def save(state):
+    with open(os.environ["FAKE_NLM_STATE"], "w") as fh:
+        json.dump(state, fh)
+
+
+def out(obj, code=0):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.exit(code)
+
+
+def opt(argv, name):
+    return argv[argv.index(name) + 1] if name in argv else None
+
+
+def main():
+    argv = sys.argv[1:]
+    with open(os.environ["FAKE_NLM_STATE"]) as fh:
+        state = json.load(fh)
+    with open(os.environ["FAKE_NLM_LOG"], "a") as fh:
+        fh.write(json.dumps({"argv": argv, "home": os.environ.get("NOTEBOOKLM_HOME"),
+                             "auth_json": os.environ.get("NOTEBOOKLM_AUTH_JSON")}) + "\n")
+    if state.get("sleep"):
+        time.sleep(state["sleep"])
+    secret = state.get("secret", "")
+    sys.stderr.write("DEBUG httpx Cookie: SID=%s\n" % secret)
+    auth = state.get("auth", "ok")
+    cmd = " ".join(a for a in argv[:2] if not a.startswith("-"))
+
+    if state.get("crash") and cmd.startswith(state["crash"]):
+        sys.stderr.write("Traceback (most recent call last):\n  ...\nKeyError: 'x'\n")
+        sys.exit(2)
+
+    if auth == "auth_required":
+        out({"error": True, "code": "AUTH_REQUIRED", "message": "Auth not found. Run 'notebooklm login' first.",
+             "checked_paths": {"storage_file": "/x/storage_state.json", "storage_source": "env", "env_var": None},
+             "help": "Run 'notebooklm login' or set NOTEBOOKLM_AUTH_JSON"}, 1)
+
+    if argv[:2] == ["auth", "check"]:
+        ok = auth in ("ok", "expired")
+        checks = {"storage_exists": auth != "missing", "json_valid": auth != "missing",
+                  "cookies_present": auth != "missing", "sid_cookie": auth != "missing",
+                  "token_fetch": ok if auth != "missing" else None}
+        payload = {"status": "ok" if ok else "error", "account": "agent@example.com", "profile": "default",
+                   "storage_path": "/data/notebooklm/profiles/default/storage_state.json",
+                   "master_token": True, "psidts": "fresh" if ok else "expired", "checks": checks,
+                   "details": {"cookie_values_seen": secret, "auth_source": "file"}}
+        if "--test" in argv:
+            payload["notebook_count"] = 3 if ok else None
+        out(payload, 0 if ok else 1)
+
+    if auth == "expired":
+        out({"error": True, "code": "AUTH_ERROR", "message": "Error: Authentication expired. SID=%s" % secret}, 1)
+
+    if argv[0] == "list":
+        titles = state.get("notebooks", [])
+        out({"notebooks": [{"id": NB_ID if titles.index(t) == i else NB_ID2, "title": t, "is_owner": True}
+                           for i, t in enumerate(titles)], "count": len(titles)})
+
+    if argv[0] == "create":
+        title = argv[1]
+        if state.get("create", "ok").startswith("unconfirmed"):
+            if state["create"] == "unconfirmed_committed":
+                state.setdefault("notebooks", []).append(title)
+                save(state)
+            out({"error": True, "code": "UNCONFIRMED_WRITE",
+                 "message": "Error: this write could not be confirmed (network error)", "unconfirmed": True}, 1)
+        state.setdefault("notebooks", []).append(title)
+        save(state)
+        data = {"notebook": {"id": NB_ID, "title": title, "role": "owner",
+                             "created_at": "2026-09-28T19:00:00", "is_owner": True}}
+        if "--use" in argv:
+            data["active_notebook_id"] = NB_ID
+        out(data)
+
+    if argv[:2] == ["source", "add"]:
+        path = argv[2]
+        if os.path.basename(path) in state.get("reject", []):
+            out({"error": True, "code": "VALIDATION_ERROR", "message": "Error: unsupported file: %s" % path}, 1)
+        n = len(open(os.environ["FAKE_NLM_LOG"]).read().splitlines())
+        out({"source": {"id": "src-%d" % n, "title": opt(argv, "--title"), "type": "pdf", "url": None}})
+
+    if argv[:2] == ["source", "wait"]:
+        result = state.get("wait", "ready")
+        body = {"source_id": argv[2], "status": result}
+        out(body, {"ready": 0, "timeout": 2}.get(result, 1))
+
+    if argv[:2] == ["artifact", "list"]:
+        out({"artifacts": [{"id": TASK_ID if i == 0 else TASK_ID2, "title": "Deep dive", "type": "Audio",
+                            "status": st} for i, st in enumerate(state.get("audio", []))]})
+
+    if argv[:2] == ["generate", "audio"]:
+        if state.get("generate", "").startswith("unconfirmed"):
+            if state["generate"] == "unconfirmed_committed":
+                state.setdefault("audio", []).append("in_progress")
+                save(state)
+            out({"error": True, "code": "UNCONFIRMED_WRITE",
+                 "message": "Error: this write could not be confirmed (network error)", "unconfirmed": True}, 1)
+        if state.get("generate") == "rate_limited_started":     # seen live: the error, and a podcast anyway
+            state.setdefault("audio", []).append("in_progress")
+            save(state)
+            out({"error": True, "code": "RATE_LIMITED", "message": "Audio generation rate limited by Google."}, 1)
+        if state.get("generate") == "rate_limited":
+            out({"error": True, "code": "RATE_LIMITED", "message": "Audio generation rate limited by Google.",
+                 "hint": "Daily quota may be exceeded."}, 1)
+        out({"task_id": TASK_ID, "status": "pending"})
+
+    if argv[:2] == ["artifact", "poll"]:
+        status = state.get("poll", "pending")
+        out({"task_id": argv[2], "status": status,
+             "url": "https://example.invalid/audio" if status == "completed" else None,
+             "error": "Generation failed" if status == "failed" else None,
+             "error_code": 7 if status == "failed" else None, "metadata": None})
+
+    if argv[:2] == ["download", "audio"]:
+        path = argv[2]
+        if state.get("no_audio"):
+            out({"error": "No completed audio artifacts found",
+                 "suggestion": "Generate one with: notebooklm generate audio"}, 1)
+        with open(path, "wb") as fh:
+            fh.write(AUDIO)
+        out({"operation": "download_single",
+             "artifact": {"id": TASK_ID, "title": "Deep dive", "selection_reason": "latest"},
+             "output_path": path, "status": "downloaded"})
+
+    out({"error": True, "code": "VALIDATION_ERROR", "message": "No such command"}, 2)
+
+
+if __name__ == "__main__":
+    main()

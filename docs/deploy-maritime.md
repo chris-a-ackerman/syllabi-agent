@@ -97,8 +97,47 @@ Expected: `[]`. To undo: `cp /data/openclaw.json.pre-subagent ~/.openclaw/opencl
 
 ## 7. Still to do
 
-- Check the V2–V4 tooling: `python3`, `pip`, `notebooklm-py`, `rclone`, and whether installs
-  survive a restart. The drive skill (SYL-95) needs the `rclone` binary. In the agent chat:
+- Install the nlm skill's CLI (SYL-94; verified 2026-09-29 with notebooklm-py 0.8.3). The
+  container has Python 3.11 but no `pip`, so it goes in a venv on the volume. The install takes
+  longer than the 60 s command cap, so run it in the background and read the log:
+  ```
+  Run: nohup sh -c 'python3 -m venv --without-pip /data/venvs/nlm && curl -sSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py && /data/venvs/nlm/bin/python /tmp/get-pip.py && /data/venvs/nlm/bin/pip install "notebooklm-py[headless]" && /data/venvs/nlm/bin/notebooklm --version && echo INSTALL-DONE' > /data/nlm-install.txt 2>&1 &
+  Run: tail -20 /data/nlm-install.txt
+  ```
+  Then, in the terminal: `maritime env set class-prep-repo NLM_BIN=/data/venvs/nlm/bin/notebooklm --no-secret --reload`.
+- NotebookLM auth (SYL-94 Security): use a **dedicated Google account for the agent** (e.g.
+  `chris.classprep@gmail.com`), never your main Gmail. A master token can mint cookies for any
+  Google service on that account. Use the same account for Drive (V4).
+  1. As the agent account, open `https://notebooklm.google.com` in a browser once and accept the
+     terms. Until then `create` fails with `UNCONFIRMED_WRITE`.
+  2. In an incognito window, open `https://accounts.google.com/EmbeddedSetup`, sign in as the
+     agent account, and copy the `oauth_token` cookie (DevTools → Application → Cookies).
+  3. Terminal, straight away (the token is single-use and short-lived; the agent refuses a
+     command with a live token in the chat text, so it goes in as a secret):
+     ```
+     maritime env set class-prep-repo NLM_OAUTH_TOKEN='<token>' --reload
+     maritime chat class-prep-repo "Run: NOTEBOOKLM_HOME=/data/notebooklm /data/venvs/nlm/bin/notebooklm login --master-token --account chris.classprep@gmail.com --oauth-token \"\$NLM_OAUTH_TOKEN\" > /data/nlm-login.txt 2>&1; echo exit=\$?" --json
+     maritime env rm class-prep-repo NLM_OAUTH_TOKEN
+     ```
+  Then:
+  ```
+  Run: python3 /data/syllabi-agent/workspace/skills/nlm/scripts/nlm.py check
+  ```
+  `check` must print `{"status": "ok", ...}`. `{"error": "NLM_AUTH"}` means the login is missing or
+  stale. `NLM_NOT_INSTALLED` means `NLM_BIN` doesn't point at the CLI. `nlm.py` keeps
+  `/data/notebooklm` at mode 700 and its credential files at 600.
+- Done when (V3, live): `nlm.py prep MAS.665 <date> /data/readings/MAS.665/<date>/<file>.pdf --topic "<topic>"`
+  returns `{notebook_id, task_id}`. A few minutes later, `nlm.py status <notebook_id> <task_id>`
+  goes from `pending` to `ready`, with an mp3 in `/data/podcasts/` and a Drive link. Swapping in a
+  stale cookie-mode `storage_state.json` must yield `{"error": "NLM_AUTH"}`. Restart the agent
+  afterwards and re-run `check` to confirm the install survived.
+- The canvas skill (SYL-93) needs only `python3` (standard library). Check it
+  with, in the agent chat:
+  ```
+  Run: python3 /data/syllabi-agent/workspace/skills/canvas/scripts/canvas.py whoami
+  Run: python3 /data/syllabi-agent/workspace/skills/canvas/scripts/canvas.py modules 40577
+  ```
+- Install rclone for the drive skill (SYL-95). In the agent chat:
   ```
   Run: rclone version
   ```
@@ -145,10 +184,26 @@ Expected: `[]`. To undo: `cp /data/openclaw.json.pre-subagent ~/.openclaw/opencl
   `ClassPrep/Podcasts/<course>-<YYYY-MM-DD>.mp3`. The skill never runs `rclone link`, so no file is
   ever reachable without a Google login. Fallback if Drive is down: send PDFs as Telegram
   attachments (100 MB cap).
+- Smoke-test the brief skill (agent chat):
+  `Run: python3 /data/syllabi-agent/workspace/skills/brief/scripts/brief.py prompt` (expect the
+  brief-writer prompt, read from the workspace's `agents/brief-writer.md`), then
+  `Run: which pdftotext; python3 -c "import pypdf"` to learn which PDF extractor the container
+  has (the built-in fallback handles text PDFs, not scans). Then ask the agent *"How do you check
+  the brief-writer's reply before you store it?"* (expect `brief validate`, the schema and the
+  ≥ 0.9 fuzzy check).
+- Smoke-test the memory tool (agent chat):
+  `Run: python3 /data/syllabi-agent/workspace/skills/preplog/scripts/preplog.py init` then
+  `Run: python3 /data/syllabi-agent/workspace/skills/preplog/scripts/preplog.py validate`.
+  Expect `created_prep_log: false` when `install-workspace.sh` already seeded the file, and
+  `sessions: 0`. Then ask the agent *"How do you record that a podcast was started, and what stops
+  you from starting a second one?"* (expect `preplog set-notebook` and `ALREADY_HAS_NOTEBOOK`).
+- The job prompts in `triggers/*.md` now name the `preplog` commands. After pulling that change,
+  re-install the jobs so OpenClaw picks up the new text:
+  `Run: cd /data/syllabi-agent && git pull && sh scripts/install-jobs.sh --replace`.
 
 ---
 
-## Verification log (2026-09-24 and 2026-09-27)
+## Verification log (2026-09-24, 2026-09-27 and 2026-09-29)
 
 These are the evidence for the writeup. Each row is something we tested, not something we assumed.
 
@@ -160,6 +215,16 @@ These are the evidence for the writeup. Each row is something we tested, not som
 | `openclaw approvals get` | `security=full, ask=off`, no allowlist file |
 | `curl`/`git` over `maritime chat`, before the `AGENTS.md` fix | the model asked for `/approve` anyway |
 | Same, after adding "Command execution (pre-authorized)" | ran; a scheduled job sent `HTTP/2 200` to Telegram |
+| `python3 --version`; `python3 -m pip` (09-29) | `Python 3.11.2`; `No module named pip`, so the nlm CLI goes in a venv at `/data/venvs/nlm` |
+| notebooklm-py 0.8.3 in the venv, `NLM_BIN` set (09-29) | installed; every CLI command and flag `nlm.py` uses exists |
+| `notebooklm login --master-token --oauth-token "$NLM_OAUTH_TOKEN"` (09-29) | logged in; `nlm.py check` → `{"status": "ok"}`. A live token in the chat text is refused by the agent, so it goes in as a Maritime secret |
+| `nlm.py check` with an empty `NOTEBOOKLM_HOME` (09-29) | exactly `{"error": "NLM_AUTH"}` |
+| `create` before the agent account had opened NotebookLM (09-29) | `UNCONFIRMED_WRITE` twice; works once the terms are accepted in a browser |
+| `generate audio` right after `source add` (09-29) | `NOTEBOOKLM_ERROR` / `UNCONFIRMED_WRITE` while the PDF processed; the same call worked minutes later. `prep` now runs `source wait` first |
+| `generate audio` that answered `RATE_LIMITED` (09-29) | NotebookLM started the podcast anyway. `prep` now re-checks `artifact list` after a failed generate |
+| `nlm.py status` on a finished podcast (09-29) | downloaded `/data/podcasts/TEST-2026-10-01.mp3` (44.5 MB); `drive_error: DRIVE_NOT_INSTALLED` until V4 |
+| `preplog set-notebook … --task-id` then `due` (09-29) | `podcast_pending` lists `notebook_id` and `task_id` for `nlm-status` |
+| `maritime restart`, then `notebooklm --version`, `$NLM_BIN`, `nlm.py check` (09-29) | 0.8.3, `/data/venvs/nlm/bin/notebooklm`, `{"status": "ok"}`: the venv, the env var and the login survive |
 | `maritime-telegram-send` | delivered to Telegram |
 | One-time OpenClaw job, agent asleep, no Maritime trigger | did **not** fire; ran late when the dashboard woke the agent |
 | `find /data/.openclaw -ipath '*cron*'` | nothing; jobs are in `state/openclaw.sqlite` |
