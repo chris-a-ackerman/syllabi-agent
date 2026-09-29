@@ -122,8 +122,30 @@ Expected: `[]`. To undo: `cp /data/openclaw.json.pre-subagent ~/.openclaw/opencl
   goes from `pending` to `ready`, with an mp3 in `/data/podcasts/` and a Drive link. Swapping in a
   stale cookie-mode `storage_state.json` must yield `{"error": "NLM_AUTH"}`. Restart the agent
   afterwards and re-run `check` to confirm the install survived.
+- The canvas skill (SYL-93) needs only `python3` (standard library). Check it
+  with, in the agent chat:
+  ```
+  Run: python3 /data/syllabi-agent/workspace/skills/canvas/scripts/canvas.py whoami
+  Run: python3 /data/syllabi-agent/workspace/skills/canvas/scripts/canvas.py modules 40577
+  ```
 - Upload the rclone config to `/data/rclone/` and set the environment variables with
   `maritime env set` (see `.env.example`).
+- Smoke-test the brief skill (agent chat):
+  `Run: python3 /data/syllabi-agent/workspace/skills/brief/scripts/brief.py prompt` (expect the
+  brief-writer prompt, read from the workspace's `agents/brief-writer.md`), then
+  `Run: which pdftotext; python3 -c "import pypdf"` to learn which PDF extractor the container
+  has (the built-in fallback handles text PDFs, not scans). Then ask the agent *"How do you check
+  the brief-writer's reply before you store it?"* (expect `brief validate`, the schema and the
+  ≥ 0.9 fuzzy check).
+- Smoke-test the memory tool (agent chat):
+  `Run: python3 /data/syllabi-agent/workspace/skills/preplog/scripts/preplog.py init` then
+  `Run: python3 /data/syllabi-agent/workspace/skills/preplog/scripts/preplog.py validate`.
+  Expect `created_prep_log: false` when `install-workspace.sh` already seeded the file, and
+  `sessions: 0`. Then ask the agent *"How do you record that a podcast was started, and what stops
+  you from starting a second one?"* (expect `preplog set-notebook` and `ALREADY_HAS_NOTEBOOK`).
+- The job prompts in `triggers/*.md` now name the `preplog` commands. After pulling that change,
+  re-install the jobs so OpenClaw picks up the new text:
+  `Run: cd /data/syllabi-agent && git pull && sh scripts/install-jobs.sh --replace`.
 
 ---
 
