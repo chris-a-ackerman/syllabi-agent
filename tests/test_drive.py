@@ -519,7 +519,7 @@ class ErrorMappingTests(DriveTestCase):
         err = body["error"]
         self.assertEqual(err["code"], "DRIVE_AUTH")
         self.assertFalse(err["retryable"])
-        self.assertIn('rclone authorize "drive"', err["message"])
+        self.assertIn("rclone config reconnect", err["message"])
         self.assertIn(self.conf, err["message"])
         self.assertIn("invalid_grant", err["message"])
         self.assertNotIn("2026/09/27 22:00:00", err["message"], "timestamps are stripped")

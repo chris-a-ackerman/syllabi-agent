@@ -244,7 +244,7 @@ def check_config_file(cfg):
         mode = None
     if mode is None or not os.path.isfile(cfg.config_path):
         raise DriveError("DRIVE_AUTH", "no rclone config at %s: authorize the agent's Google account on your laptop "
-                         "(`rclone authorize \"drive\"`), write the conf there with scope = drive.file, then "
+                         "(`rclone config`, own client_id, scope = drive.file), write the conf there, then "
                          "chmod 600 it (docs/deploy-maritime.md §7)" % cfg.config_path)
     if mode & 0o077:
         raise DriveError("DRIVE_AUTH", "%s is readable by other users (mode %03o); it holds a refresh token. "
@@ -369,8 +369,8 @@ def classify(cfg, rc, err, what):
     summary = _stderr_summary(err)
     m = _HTTP_STATUS_RE.search(err)
     status = int(m.group(1)) if m else None
-    reconnect = ("Re-authorize the agent's Google account on your laptop (`rclone authorize \"drive\"`), put the new "
-                 "token in %s (scope = drive.file, chmod 600)" % cfg.config_path)
+    reconnect = ("Re-authorize the agent's Google account on your laptop (`rclone config reconnect gdrive:`), put the "
+                 "new token in %s (scope = drive.file, chmod 600)" % cfg.config_path)
     if status == 401 or _AUTH_RE.search(err):
         return DriveError("DRIVE_AUTH", "%s: rclone could not use the Drive remote %s: (%s). %s"
                           % (what, cfg.remote, summary or "no detail", reconnect), retryable=False, status=status)

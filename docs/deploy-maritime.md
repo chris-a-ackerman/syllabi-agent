@@ -168,22 +168,45 @@ Expected: `[]`. To undo: `cp /data/openclaw.json.pre-subagent ~/.openclaw/opencl
   `maritime env set` (see `.env.example`).
 - **Drive identity and rclone config (SYL-95 Security).** rclone runs as the **dedicated agent
   Google account** (the one from V3), never Chris's main account, with `scope = drive.file`, so
-  the agent can only see and change files it created itself. The container has no browser, so:
-  1. On the laptop, signed in to the agent account in the browser: `rclone authorize "drive"`.
-     It prints a token JSON.
-  2. Write `/data/rclone/rclone.conf` (do not commit it, do not paste it into chat or logs):
+  the agent can only see and change files it created itself. It uses its **own OAuth client**:
+  rclone's shared client_id is being retired during 2026 (`rclone config` warns about it). The
+  container has no browser, so the token is made on the laptop and goes in as a secret
+  (verified 2026-09-29 with rclone v1.75.1):
+  1. **Google Cloud project.** At https://console.cloud.google.com, signed in as the agent
+     account (`syllabi382@gmail.com`), create a project (e.g. `syllabi-agent`), then
+     *APIs & Services → Library → Google Drive API → Enable*.
+  2. **Consent screen.** *Google Auth Platform* (or *OAuth consent screen*) → *Get started*: app
+     name `syllabi-agent`, support and contact email the agent account, audience **External**.
+     Then *Audience → Publish app*, so the status is **In production**. Don't skip this: in
+     "Testing" the sign-in fails with `Error 403: access_denied` ("has not completed the Google
+     verification process") and a test user's token expires after 7 days. `drive.file` is a
+     non-sensitive scope, so publishing needs no Google review.
+  3. **Client.** *Clients → Create client → Desktop app*, name `rclone`. Keep the client ID and
+     client secret.
+  4. **Token, on the laptop** (`brew install rclone`): `rclone config` → `n`, name `gdrive`,
+     storage `drive`, paste the client_id and client_secret, scope **`drive.file`**, no advanced
+     config, auto config `y`. Sign in as the agent account; on "Google hasn't verified this app"
+     click *Advanced → Go to syllabi-agent*. No shared drive, keep the remote. Then
+     `cat ~/.config/rclone/rclone.conf`: you need `client_id`, `client_secret` and the whole
+     `token = {...}` JSON (access and refresh token together).
+  5. **Write `/data/rclone/rclone.conf` through secret env vars** (never paste the token or the
+     client secret into the chat, and never commit the file). In the terminal:
      ```
-     [gdrive]
-     type = drive
-     scope = drive.file
-     token = {"access_token":"…","token_type":"Bearer","refresh_token":"…","expiry":"…"}
+     maritime env set class-prep-repo RCLONE_TOKEN='<token JSON>' --reload
+     maritime env set class-prep-repo RCLONE_CLIENT_SECRET='<client secret>' --reload
+     maritime chat class-prep-repo "Run: mkdir -p /data/rclone && printf '[gdrive]\ntype = drive\nclient_id = %s\nclient_secret = %s\nscope = drive.file\ntoken = %s\n' '<client id>' \"\$RCLONE_CLIENT_SECRET\" \"\$RCLONE_TOKEN\" > /data/rclone/rclone.conf && chmod 600 /data/rclone/rclone.conf && ls -l /data/rclone/rclone.conf"
+     maritime env rm class-prep-repo RCLONE_TOKEN
+     maritime env rm class-prep-repo RCLONE_CLIENT_SECRET
      ```
-  3. `Run: chmod 600 /data/rclone/rclone.conf`. The drive skill refuses to run (`DRIVE_AUTH`,
-     "chmod 600") while the file is readable by group or others: it holds a refresh token.
-  4. Let the agent create the folder: the first `drive-put` makes `ClassPrep/` (with `drive.file`,
+     `ls` must show `-rw-------`. The drive skill refuses to run (`DRIVE_AUTH`, "chmod 600")
+     while the file is readable by group or others: it holds a refresh token. rclone refreshes
+     the access token itself and rewrites the file.
+     To reconnect later (`DRIVE_AUTH`, token expired or revoked): `rclone config reconnect gdrive:`
+     on the laptop, then repeat this step with the new token.
+  6. Let the agent create the folder: the first `drive-put` makes `ClassPrep/` (with `drive.file`,
      a folder you make by hand is invisible to the agent and uploads into it fail with
      `DRIVE_AUTH` / `insufficientFilePermissions`).
-  5. From the **agent account** in drive.google.com, share `ClassPrep` with Chris's main account
+  7. From the **agent account** in drive.google.com, share `ClassPrep` with Chris's main account
      by email (Viewer or Editor), **not** "anyone with the link". It shows up under *Shared with
      me* in the iPad Files app and in Goodnotes' "Import from Google Drive"; `web_url` links open
      on the phone because it is signed in to the main account.

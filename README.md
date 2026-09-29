@@ -9,7 +9,8 @@ were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritim
 
 > **Status: V0 scaffold + implemented skills.** The instructions, schemas, trigger prompts and
 > tool contracts are in place. The `drive` skill is implemented (SYL-95, a CLI over rclone,
-> tested against a fake rclone, not yet run against Google Drive).
+> tested against a fake rclone, and run live on Maritime on 2026-09-29: upload, re-upload with no
+> transfer, sharing to the iPad, the refusal cases and a restart).
 > The `nlm` skill is implemented (SYL-94, a wrapper over the `notebooklm` CLI, tested against a
 > fake CLI, and run live on Maritime on 2026-09-29 through to a downloaded mp3; the live Drive upload
 > is still to test). The `canvas` (SYL-93) and `syllabi` (SYL-96) skills
@@ -293,6 +294,6 @@ deploy. The full runbook is in [`docs/deploy-maritime.md`](docs/deploy-maritime.
 
 Checked 2026-09-29: `python3` is 3.11 but has no `pip`; the nlm skill's `notebooklm` CLI goes in a
 venv at `/data/venvs/nlm` with `NLM_BIN` pointing at it (see the deploy runbook §7). The venv,
-`NLM_BIN` and the NotebookLM login survive `maritime restart` (checked the same day). Still to
-check: whether `rclone` is installed (the drive skill needs it on PATH; `drive.py check`
-tells you).
+`NLM_BIN` and the NotebookLM login survive `maritime restart` (checked the same day). rclone
+v1.75.1 runs from `/data/bin/rclone` (`DRIVE_RCLONE_BIN`), and it and the Drive config survive
+`maritime restart` (checked 2026-09-29).
