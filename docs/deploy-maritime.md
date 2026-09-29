@@ -106,7 +106,7 @@ Expected: `[]`. To undo: `cp /data/openclaw.json.pre-subagent ~/.openclaw/opencl
   ```
   Then, in the terminal: `maritime env set class-prep-repo NLM_BIN=/data/venvs/nlm/bin/notebooklm --no-secret --reload`.
 - NotebookLM auth (SYL-94 Security): use a **dedicated Google account for the agent** (e.g.
-  `chris.classprep@gmail.com`), never your main Gmail. A master token can mint cookies for any
+  `syllabi382@gmail.com`), never your main Gmail. A master token can mint cookies for any
   Google service on that account. Use the same account for Drive (V4).
   1. As the agent account, open `https://notebooklm.google.com` in a browser once and accept the
      terms. Until then `create` fails with `UNCONFIRMED_WRITE`.
@@ -116,7 +116,7 @@ Expected: `[]`. To undo: `cp /data/openclaw.json.pre-subagent ~/.openclaw/opencl
      command with a live token in the chat text, so it goes in as a secret):
      ```
      maritime env set class-prep-repo NLM_OAUTH_TOKEN='<token>' --reload
-     maritime chat class-prep-repo "Run: NOTEBOOKLM_HOME=/data/notebooklm /data/venvs/nlm/bin/notebooklm login --master-token --account chris.classprep@gmail.com --oauth-token \"\$NLM_OAUTH_TOKEN\" > /data/nlm-login.txt 2>&1; echo exit=\$?" --json
+     maritime chat class-prep-repo "Run: NOTEBOOKLM_HOME=/data/notebooklm /data/venvs/nlm/bin/notebooklm login --master-token --account syllabi382@gmail.com --oauth-token \"\$NLM_OAUTH_TOKEN\" > /data/nlm-login.txt 2>&1; echo exit=\$?" --json
      maritime env rm class-prep-repo NLM_OAUTH_TOKEN
      ```
   Then:
