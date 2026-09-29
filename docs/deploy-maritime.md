@@ -158,7 +158,7 @@ Expected: `[]`. To undo: `cp /data/openclaw.json.pre-subagent ~/.openclaw/opencl
 
 ---
 
-## Verification log (2026-09-24 and 2026-09-27)
+## Verification log (2026-09-24, 2026-09-27 and 2026-09-29)
 
 These are the evidence for the writeup. Each row is something we tested, not something we assumed.
 
@@ -170,6 +170,16 @@ These are the evidence for the writeup. Each row is something we tested, not som
 | `openclaw approvals get` | `security=full, ask=off`, no allowlist file |
 | `curl`/`git` over `maritime chat`, before the `AGENTS.md` fix | the model asked for `/approve` anyway |
 | Same, after adding "Command execution (pre-authorized)" | ran; a scheduled job sent `HTTP/2 200` to Telegram |
+| `python3 --version`; `python3 -m pip` (09-29) | `Python 3.11.2`; `No module named pip`, so the nlm CLI goes in a venv at `/data/venvs/nlm` |
+| notebooklm-py 0.8.3 in the venv, `NLM_BIN` set (09-29) | installed; every CLI command and flag `nlm.py` uses exists |
+| `notebooklm login --master-token --oauth-token "$NLM_OAUTH_TOKEN"` (09-29) | logged in; `nlm.py check` → `{"status": "ok"}`. A live token in the chat text is refused by the agent, so it goes in as a Maritime secret |
+| `nlm.py check` with an empty `NOTEBOOKLM_HOME` (09-29) | exactly `{"error": "NLM_AUTH"}` |
+| `create` before the agent account had opened NotebookLM (09-29) | `UNCONFIRMED_WRITE` twice; works once the terms are accepted in a browser |
+| `generate audio` right after `source add` (09-29) | `NOTEBOOKLM_ERROR` / `UNCONFIRMED_WRITE` while the PDF processed; the same call worked minutes later. `prep` now runs `source wait` first |
+| `generate audio` that answered `RATE_LIMITED` (09-29) | NotebookLM started the podcast anyway. `prep` now re-checks `artifact list` after a failed generate |
+| `nlm.py status` on a finished podcast (09-29) | downloaded `/data/podcasts/TEST-2026-10-01.mp3` (44.5 MB); `drive_error: DRIVE_NOT_INSTALLED` until V4 |
+| `preplog set-notebook … --task-id` then `due` (09-29) | `podcast_pending` lists `notebook_id` and `task_id` for `nlm-status` |
+| `maritime restart`, then `notebooklm --version`, `$NLM_BIN`, `nlm.py check` (09-29) | 0.8.3, `/data/venvs/nlm/bin/notebooklm`, `{"status": "ok"}`: the venv, the env var and the login survive |
 | `maritime-telegram-send` | delivered to Telegram |
 | One-time OpenClaw job, agent asleep, no Maritime trigger | did **not** fire; ran late when the dashboard woke the agent |
 | `find /data/.openclaw -ipath '*cron*'` | nothing; jobs are in `state/openclaw.sqlite` |

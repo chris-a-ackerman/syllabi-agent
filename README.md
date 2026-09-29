@@ -280,5 +280,6 @@ deploy. The full runbook is in [`docs/deploy-maritime.md`](docs/deploy-maritime.
 | new | Filesystem persistence | On restart Maritime logs "Captured derived image … Edits will survive restart", so installs outside `/data` should persist too. Confirm with the first V2 install. |
 
 Checked 2026-09-29: `python3` is 3.11 but has no `pip`; the nlm skill's `notebooklm` CLI goes in a
-venv at `/data/venvs/nlm` with `NLM_BIN` pointing at it (see the deploy runbook §7). Still to check:
-that the venv and the NotebookLM login survive `maritime restart`, and whether `rclone` is available.
+venv at `/data/venvs/nlm` with `NLM_BIN` pointing at it (see the deploy runbook §7). The venv,
+`NLM_BIN` and the NotebookLM login survive `maritime restart` (checked the same day). Still to
+check: whether `rclone` is available.
