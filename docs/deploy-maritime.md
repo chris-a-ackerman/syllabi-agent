@@ -141,11 +141,18 @@ Expected: `[]`. To undo: `cp /data/openclaw.json.pre-subagent ~/.openclaw/opencl
   ```
   Run: rclone version
   ```
-  If it is missing, put a static build on the volume (pick `arm64` if `uname -m` says `aarch64`):
+  If it is missing, put a static build on the volume (pick `arm64` if `uname -m` says `aarch64`).
+  The download can take longer than the 60 s command cap, and a cut-off download leaves a binary
+  that dies with `Segmentation fault` (exit 139; `drive.py check` then reports `DRIVE_NET`,
+  "rclone exit -11"). So run it in the background, and only copy the binary into `/data/bin/`
+  once it has started (checked 2026-09-29 with rclone v1.75.1 on x86_64):
   ```
-  Run: mkdir -p /data/bin && curl -fsSL https://downloads.rclone.org/rclone-current-linux-amd64.zip -o /tmp/rclone.zip && python3 -c "import zipfile; zipfile.ZipFile('/tmp/rclone.zip').extractall('/tmp/rclone')" && cp /tmp/rclone/rclone-*/rclone /data/bin/rclone && chmod +x /data/bin/rclone && /data/bin/rclone version
+  Run: rm -rf /data/rc && mkdir -p /data/rc /data/bin && cd /data/rc && nohup sh -c 'curl -fsSL https://downloads.rclone.org/rclone-current-linux-amd64.zip -o rclone.zip && python3 -m zipfile -e rclone.zip x && chmod +x x/*/rclone && x/*/rclone version && cp x/*/rclone /data/bin/rclone && /data/bin/rclone version && echo INSTALL-DONE' > /data/rclone-install.txt 2>&1 &
+  Run: tail -5 /data/rclone-install.txt
   ```
-  and set `DRIVE_RCLONE_BIN=/data/bin/rclone` with `maritime env set`. Then, with
+  Wait for `INSTALL-DONE` (re-run the `tail`), then `Run: rm -rf /data/rc`. If the log shows
+  `Segmentation fault`, re-run the install. Then, in the terminal:
+  `maritime env set class-prep-repo DRIVE_RCLONE_BIN=/data/bin/rclone --no-secret --reload`. Then, with
   `/data/rclone/rclone.conf` uploaded (next bullet):
   ```
   Run: python3 /data/syllabi-agent/workspace/skills/drive/scripts/drive.py check
