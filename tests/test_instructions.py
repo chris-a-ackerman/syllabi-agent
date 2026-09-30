@@ -428,14 +428,15 @@ class OpenClawConfigTests(unittest.TestCase):
     def test_main_loads_all_of_agents_md(self):
         # OpenClaw cuts each workspace file at bootstrapMaxChars (default 20000). The installed
         # AGENTS.md is Maritime's block (~1.6k chars) + ours; keep 4000 chars of headroom for it.
-        main = self.entry("main")
-        m = re.search(r"bootstrapMaxChars:\s*(\d+)", main)
-        self.assertIsNotNone(m, "main must raise bootstrapMaxChars above OpenClaw's 20000 default")
+        # In agents.defaults, not only on `main`: the cron jobs have no agent id.
+        defaults = self.text.split("list:")[0]
+        m = re.search(r"bootstrapMaxChars:\s*(\d+)", defaults)
+        self.assertIsNotNone(m, "agents.defaults must raise bootstrapMaxChars above OpenClaw's 20000 default")
         limit = int(m.group(1))
         size = len(read(AGENTS_MD))
         self.assertLessEqual(size + 4000, limit,
                              "AGENTS.md (%d chars) + Maritime's block no longer fits in %d" % (size, limit))
-        total = re.search(r"bootstrapTotalMaxChars:\s*(\d+)", main)
+        total = re.search(r"bootstrapTotalMaxChars:\s*(\d+)", defaults)
         self.assertIsNotNone(total)
         self.assertGreaterEqual(int(total.group(1)), size + len(read(SOUL_MD)) + 8000)
 

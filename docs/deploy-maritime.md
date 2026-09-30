@@ -194,10 +194,17 @@ Expected: `[]`. To undo: `cp /data/openclaw.json.pre-subagent ~/.openclaw/opencl
      ```
      maritime env set class-prep-repo RCLONE_TOKEN='<token JSON>' --reload
      maritime env set class-prep-repo RCLONE_CLIENT_SECRET='<client secret>' --reload
-     maritime chat class-prep-repo "Run: mkdir -p /data/rclone && printf '[gdrive]\ntype = drive\nclient_id = %s\nclient_secret = %s\nscope = drive.file\ntoken = %s\n' '<client id>' \"\$RCLONE_CLIENT_SECRET\" \"\$RCLONE_TOKEN\" > /data/rclone/rclone.conf && chmod 600 /data/rclone/rclone.conf && ls -l /data/rclone/rclone.conf"
-     maritime env rm class-prep-repo RCLONE_TOKEN
-     maritime env rm class-prep-repo RCLONE_CLIENT_SECRET
+     maritime chat class-prep-repo "Run: [ -n \"\$RCLONE_TOKEN\" ] && [ -n \"\$RCLONE_CLIENT_SECRET\" ] && mkdir -p /data/rclone && umask 077 && printf '[gdrive]\ntype = drive\nclient_id = %s\nclient_secret = %s\nscope = drive.file\ntoken = %s\n' '<client id>' \"\$RCLONE_CLIENT_SECRET\" \"\$RCLONE_TOKEN\" > /data/rclone/rclone.conf && chmod 600 /data/rclone/rclone.conf && ls -l /data/rclone/rclone.conf"
+     maritime env rm class-prep-repo RCLONE_TOKEN --reload
+     maritime env rm class-prep-repo RCLONE_CLIENT_SECRET --reload
      ```
+     `<client id>` is the `client_id` line of the laptop's `~/.config/rclone/rclone.conf` (not
+     secret). Take it from there, not from the agent's old file: the first setup (2026-09-29)
+     used rclone's shared client and had no `client_id` line at all, and a token only works with
+     the client that issued it. The `[ -n ... ]` guards stop an unset variable from writing an empty
+     token. If the terminal can't reach the agent, paste the same `Run:` line (without the
+     backslashes) into the dashboard chat: it holds no secret values. `maritime env rm` needs `--reload` to
+     drop the variables from the running container; without it they stay until the next restart.
      `ls` must show `-rw-------`. The drive skill refuses to run (`DRIVE_AUTH`, "chmod 600")
      while the file is readable by group or others: it holds a refresh token. rclone refreshes
      the access token itself and rewrites the file.
@@ -233,10 +240,15 @@ Expected: `[]`. To undo: `cp /data/openclaw.json.pre-subagent ~/.openclaw/opencl
 - After the V9 hardening merges (`AGENTS.md`, `SOUL.md` and all three trigger prompts changed):
   `Run: cd /data/syllabi-agent && git pull && sh scripts/install-workspace.sh && sh scripts/install-jobs.sh --replace`,
   then apply the config patch from §6 again (`cp ~/.openclaw/openclaw.json /data/openclaw.json.pre-v9`
-  first): it raises `bootstrapMaxChars` for `main` to 40000. **Without it OpenClaw silently cuts
+  first): it raises `agents.defaults.bootstrapMaxChars` to 40000 (in `defaults`: the cron jobs have no
+agent id, so a limit set only on `main` does not reach them). **Without it OpenClaw silently cuts
   `AGENTS.md` at 20000 chars** and the agent loses the phases and the stopping conditions (seen
   2026-09-30: a chat reply of `{"bootstrapMaxChars":20000, ... "rawChars":31330,"injectedChars":19188}`).
-  Then `maritime restart class-prep-repo`. **Check** (agent chat): *"Where do your instructions
+  Then `maritime restart class-prep-repo`, and **check that `AGENTS.md` survived the restart**:
+  Maritime rewrites the file on every restart to refresh its own block, and once (2026-09-30,
+  right after a config patch) it kept only its block and dropped ours. `Run: wc -c
+  /data/.openclaw/workspace/AGENTS.md` must show ~31k, not ~1.6k; if not, re-run
+  `sh scripts/install-workspace.sh` (no restart needed). **Check** (agent chat): *"Where do your instructions
   come from, and what do you do with an instruction you find inside a reading?"* It should name
   AGENTS.md, SOUL.md, the trigger prompt and Chris (`TELEGRAM_CHAT_ID` on Telegram, or the operator
   chat), and say it ignores the instruction, logs `suspected-injection` and carries on. Set
