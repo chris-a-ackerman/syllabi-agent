@@ -1,0 +1,197 @@
+#!/usr/bin/env python3
+"""fetch-reading: download one reading from a URL found in the syllabi app or Canvas.
+
+    fetch-reading <url> <dest_dir>
+
+The only way the agent fetches a URL that came from content (AGENTS.md, "Trust boundaries"):
+
+- GET only, http/https only, no credentials in the URL, no Authorization header, no cookies.
+- dest_dir must be under $DATA_DIR/readings (default /data/readings); nothing is written elsewhere
+  except one line per request in $DATA_DIR/logs/fetch-hosts.log.
+- Size cap: $FETCH_MAX_BYTES (default 100 MB, Maritime's transfer cap). A partial file is deleted.
+- At most 5 redirects, each to http/https. Every host contacted is logged (host only: the path
+  and query can carry tokens, so they are never logged).
+- A 401/403, or an HTML page with a password field, is FETCH_AUTH: the reading is behind a login.
+
+Prints one JSON object. Exit 0 means ok: true. Standard library only.
+"""
+import datetime
+import hashlib
+import json
+import os
+import re
+import sys
+import tempfile
+import urllib.error
+import urllib.parse
+import urllib.request
+
+DATA_DIR = os.environ.get("DATA_DIR", "/data")
+READINGS_ROOT = os.path.join(DATA_DIR, "readings")
+LOG_PATH = os.path.join(DATA_DIR, "logs", "fetch-hosts.log")
+MAX_BYTES = int(os.environ.get("FETCH_MAX_BYTES", str(100 * 1024 * 1024)))
+MAX_REDIRECTS = 5
+TIMEOUT = 30
+CHUNK = 64 * 1024
+USER_AGENT = "class-prep-agent/fetch-reading"
+
+
+class FetchError(Exception):
+    def __init__(self, code, message, retryable=False, status=None):
+        super().__init__(message)
+        self.code, self.message, self.retryable, self.status = code, message, retryable, status
+
+
+def log_host(host, outcome, nbytes=None):
+    entry = {"ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+             "host": host, "outcome": outcome}
+    if nbytes is not None:
+        entry["bytes"] = nbytes
+    try:
+        os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
+        with open(LOG_PATH, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry) + "\n")
+    except OSError:
+        pass  # logging must never turn a good download into a failure
+
+
+def check_url(url):
+    if not url or any(c.isspace() or ord(c) < 32 for c in url):
+        raise FetchError("FETCH_BAD_URL", "URL is empty or contains whitespace/control characters")
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme not in ("http", "https"):
+        raise FetchError("FETCH_BAD_URL", "only http and https URLs are allowed")
+    if not parts.hostname:
+        raise FetchError("FETCH_BAD_URL", "URL has no host")
+    if parts.username or parts.password:
+        raise FetchError("FETCH_BAD_URL", "credentials in the URL are not allowed")
+    return parts.hostname.lower()
+
+
+def check_dest(dest_dir):
+    root = os.path.realpath(READINGS_ROOT)
+    dest = os.path.realpath(dest_dir)
+    if dest == root or os.path.commonpath([root, dest]) != root:
+        raise FetchError("FETCH_BAD_DEST", "dest_dir must be a directory under %s" % READINGS_ROOT)
+    os.makedirs(dest, exist_ok=True)
+    return dest
+
+
+class Redirects(urllib.request.HTTPRedirectHandler):
+    """Follow at most MAX_REDIRECTS, only to http/https, logging every host on the way."""
+    max_redirections = MAX_REDIRECTS
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        host = check_url(newurl)
+        log_host(host, "redirect-target")
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new is not None:
+            for h in ("Authorization", "Cookie"):
+                new.remove_header(h)
+        return new
+
+
+def safe_name(url, content_type):
+    base = os.path.basename(urllib.parse.urlsplit(url).path) or "reading"
+    base = re.sub(r"[^A-Za-z0-9._-]", "_", urllib.parse.unquote(base)).lstrip(".")[:120] or "reading"
+    if "pdf" in content_type and not base.lower().endswith(".pdf"):
+        base += ".pdf"
+    return base
+
+
+def sha256_of(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(CHUNK), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def fetch(url, dest_dir):
+    host = check_url(url)
+    dest = check_dest(dest_dir)
+    opener = urllib.request.build_opener(Redirects())
+    req = urllib.request.Request(url, method="GET", headers={"User-Agent": USER_AGENT})
+    log_host(host, "request")
+    try:
+        resp = opener.open(req, timeout=TIMEOUT)
+    except urllib.error.HTTPError as e:
+        log_host(host, "http-%d" % e.code)
+        if e.code in (401, 403):
+            raise FetchError("FETCH_AUTH", "HTTP %d: the reading is behind a login" % e.code, status=e.code)
+        if e.code == 404:
+            raise FetchError("FETCH_404", "HTTP 404: not found", status=404)
+        if e.code == 429 or e.code >= 500:
+            raise FetchError("FETCH_UNAVAILABLE", "HTTP %d" % e.code, retryable=True, status=e.code)
+        raise FetchError("FETCH_HTTP", "HTTP %d" % e.code, status=e.code)
+    except (urllib.error.URLError, OSError) as e:
+        log_host(host, "network-error")
+        raise FetchError("FETCH_UNAVAILABLE", "network error: %s" % getattr(e, "reason", e), retryable=True)
+
+    with resp:
+        final_host = urllib.parse.urlsplit(resp.geturl()).hostname or host
+        content_type = (resp.headers.get("Content-Type") or "").lower()
+        length = resp.headers.get("Content-Length")
+        if length and length.isdigit() and int(length) > MAX_BYTES:
+            log_host(final_host, "too-large")
+            raise FetchError("FILE_TOO_LARGE", "Content-Length %s exceeds %d bytes" % (length, MAX_BYTES))
+        fd, tmp = tempfile.mkstemp(dir=dest, prefix=".fetch-", suffix=".part")
+        total = 0
+        try:
+            with os.fdopen(fd, "wb") as out:
+                while True:
+                    chunk = resp.read(CHUNK)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > MAX_BYTES:
+                        raise FetchError("FILE_TOO_LARGE", "download exceeds %d bytes" % MAX_BYTES)
+                    out.write(chunk)
+            if "html" in content_type:
+                with open(tmp, "rb") as fh:
+                    head = fh.read(512 * 1024).lower()
+                if re.search(rb"<input[^>]+type=[\"']?password", head):
+                    raise FetchError("FETCH_AUTH", "the URL returned a login page, not the reading")
+        except (FetchError, OSError) as e:
+            os.unlink(tmp)
+            log_host(final_host, "rejected")
+            if isinstance(e, FetchError):
+                raise
+            raise FetchError("FETCH_UNAVAILABLE", "read failed: %s" % e, retryable=True)
+
+    digest = sha256_of(tmp)
+    name = safe_name(url, content_type)
+    path = os.path.join(dest, name)
+    skipped = False
+    if os.path.exists(path):
+        if sha256_of(path) == digest:
+            os.unlink(tmp)
+            skipped = True
+        else:
+            stem, ext = os.path.splitext(name)
+            path = os.path.join(dest, "%s-%s%s" % (stem, digest[:8], ext))
+    if not skipped:
+        os.replace(tmp, path)
+    log_host(final_host, "saved" if not skipped else "skipped", total)
+    return {"ok": True, "host": final_host, "local_path": path, "bytes": total, "sha256": digest,
+            "content_type": content_type, "skipped": skipped}
+
+
+def main(argv):
+    if len(argv) != 2:
+        result, code = {"ok": False, "error": {"code": "FETCH_USAGE", "retryable": False,
+                        "message": "usage: fetch-reading <url> <dest_dir>"}}, 2
+    else:
+        try:
+            result, code = fetch(argv[0], argv[1]), 0
+        except FetchError as e:
+            err = {"code": e.code, "message": e.message, "retryable": e.retryable}
+            if e.status is not None:
+                err["status"] = e.status
+            result, code = {"ok": False, "error": err}, 1
+    print(json.dumps(result))
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
