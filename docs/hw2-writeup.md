@@ -4,8 +4,11 @@ MIT AI Studio (MAS.665) · Chris Ackerman · Repo: `chris-a-ackerman/syllabi-age
 Plan of record and full design: [`README.md`](../README.md). Deploy runbook and verification
 log: [`docs/deploy-maritime.md`](deploy-maritime.md).
 
-> Placeholders marked **[TODO]** get filled from the live run on 2026-09-30. Everything else
-> describes what is built and already verified.
+> **Status of the live eval (2026-09-30, written under deadline).** The full planned run (case 1
+> through a podcast, case 5 with NotebookLM auth broken) did **not** fit in the time left and was
+> not run. What is reported below as *observed* comes from the agent's real scheduled runs on
+> 9/29–9/30 and from smoke tests on 9/30. Everything marked *designed* is built and unit-tested
+> but was not seen working end to end live. Raw evidence: [`evidence/run-2026-09-30/`](../evidence/run-2026-09-30/).
 
 ## Overview
 
@@ -20,12 +23,51 @@ brief, the Drive links and the podcast link.
 It is an OpenClaw agent hosted on Maritime: a container that sleeps between runs and keeps its
 state on a persistent `/data` volume. The work is split into three phases (**prep**, **poll**,
 **notify**) because NotebookLM takes minutes to generate audio and Maritime gives a chat reply
-about 30 seconds. For this submission the three phases are run by sending each phase's prompt
-(`triggers/*.md`) to the agent. Unattended scheduling is designed and its wake mechanism was
-tested (§3), but it is not needed for the rubric and is not switched on.
+about 30 seconds. The three phases run as OpenClaw cron jobs whose prompts are `triggers/*.md`.
+They were installed and firing unattended on 9/29–9/30 (§3), and those real runs are most of
+the evidence below.
 
 **Timing rule:** the brief goes out 24 hours before class if something is due before class,
 otherwise at 06:30 on class day.
+
+## Configuration at a glance
+
+| Choice | Setting |
+| --- | --- |
+| Harness | OpenClaw (`ghcr.io/openclaw/openclaw:2026.7.1`) on Maritime, agent `class-prep-repo`; persistent `/data` volume |
+| Model | GPT-5.4 through Maritime's LLM proxy (the template's default) |
+| Instructions | `workspace/AGENTS.md` (phases, hard rules, stop and ask rules; ~31k chars, so `agents.defaults.bootstrapMaxChars` = 40000), `SOUL.md`, and one prompt per phase in `triggers/` |
+| Skills / tools | `syllabi`, `canvas` (read-only), `nlm`, `drive`, `fetch-reading`, `pdf-text`, `brief`, `preplog`, and Maritime's `maritime-telegram-send` (§1) |
+| Memory / state | `/data/memory/prep-log.json` (per-class state machine) + `course-notes.md`, only through `preplog`; run logs in `/data/logs/` (§2) |
+| Permissions | exec approvals off (`security=full, ask=off`) with an explicit allow-list in AGENTS.md; no Canvas writes; `drive.file` scope on a dedicated Google account; subagent `deny: ["*"]` |
+| Stopping | status `done`/`ready`/`podcast-pending`/`needs-human`; 3 attempts; 25 tool calls per session per run |
+| Escalation | one Telegram question, then `needs-human`, for 4 cases: gated reading, syllabus/Canvas conflict, `NLM_AUTH` after retry, a deliverable needing Chris's own answer |
+| Scheduling | Maritime wake trigger every 30 min + 5 OpenClaw cron jobs (ET) |
+
+## Architecture
+
+```
+ Maritime wake (*/30)          operator chat (Run: …)       Telegram (Chris)
+          │                            │                          ▲
+          ▼                            ▼                          │ maritime-telegram-send
+ OpenClaw cron: prep 19:00 · poll every 30 min · notify 06:30     │
+          │                                                        │
+          ▼                                                        │
+ ┌──────────────── main agent (GPT-5.4, AGENTS.md) ───────────────┴──┐
+ │ 1 read memory ─► 2 plan per session ─► 3 tools ─► 4 write memory+log│
+ └───┬───────────────┬──────────────────────┬───────────────────┬──────┘
+     │               │                      │                   │
+     ▼               ▼                      ▼                   ▼
+ preplog ⇄ /data/memory   syllabi · canvas · fetch-reading   nlm-prep / nlm-status   brief bundle
+ (prep-log.json,          pdf-text · drive-put ─► Google     ─► NotebookLM            │ sessions_spawn
+  course-notes.md)        Drive ClassPrep/                                            ▼
+ /data/logs/*.md                                                        brief-writer subagent
+                                                                        (no tools, JSON out)
+                                                                              │
+                                                              brief validate (schema + fuzzy ≥ 0.9)
+                                                                              ▼
+                                                               preplog set-brief ─► send pass
+```
 
 ## 1. Tools
 
@@ -49,8 +91,14 @@ download an external reading link, with size cap, no credentials, and every host
 
 The error codes are specific enough to act on. For example, Canvas 401 (`CANVAS_401`, the token
 is dead, so ask me once) and Canvas 403 (`CANVAS_403`, this one file is locked, so fall back to
-the syllabus link or ask for the PDF) lead to different actions. **[TODO: paste one real
-tool-call/response pair from the run log.]**
+the syllabus link or ask for the PDF) lead to different actions. Real calls from the 9/30 smoke test (operator chat, `Run:` lines):
+
+```
+syllabi check      → {"ok": true, "timezone": "America/New_York", "courses": 6, "sessions": 3, "events": 4, "endpoint": "/agent-upcoming"}
+canvas.py whoami   → {"ok": true, "user": {"id": 195836, "name": "Chris Ackerman"}}
+nlm.py check       → {"status": "ok", "notebooklm_home": "/data/notebooklm"}
+drive.py check     → {"ok": true, "root": "gdrive:ClassPrep", "root_exists": true, "entries": 2, ...}
+```
 
 Tests: 523 unit tests across the skills, no network (`python3 -m unittest discover -s tests`).
 
@@ -78,11 +126,32 @@ most:
 - **Never send the same message twice** (`ALREADY_SENT`).
 - **Three attempts, then ask me** (`MAX_ATTEMPTS` → `needs-human`).
 
-Evidence:
-- **[TODO: the prep-log record for the test class before prep, after prep, and after notify.]**
-- **[TODO: course-notes.md diff after the first run.]**
-- **[TODO: re-running prep on the same class: one memory read, no tool calls, no Telegram
-  message (eval case 4).]**
+Evidence (observed, from the real scheduled runs of 9/29–9/30):
+- **The prep-log record for 15.662 on 9/30** (key `15.662-/-11.383@2026-09-30`: the syllabi app's
+  course code is "15.662 / 11.383", so the key isn't `15.662@…`). It shows memory working as a
+  record of what happened, and it also shows a bug (§5):
+  ```
+  "status": "notified-partial", "attempts": 1, "readings": [], "drive_paths": [],
+  "history": [
+    {"ts": "2026-09-29T19:01:03-04:00", "trigger": "prep", "action": "record created"},
+    {"ts": "2026-09-29T19:01:07-04:00", "trigger": "prep", "action": "run started (attempt 1)"},
+    {"ts": "2026-09-29T22:31:51-04:00", "trigger": "poll", "action": "brief sent without podcast link", "detail": "podcast pending"}],
+  "notify_at": "2026-09-29T19:00:29-04:00", "brief_sent_at": "2026-09-29T22:31:51-04:00"
+  ```
+- **course-notes.md:** unchanged since 9/25 (no run got far enough to learn anything). No diff to show.
+- **Memory stops re-work (the case 4 behaviour, observed):** three later prep runs on 9/30
+  (08:01, 08:42, 08:48 ET) each read memory, saw every session was already `notified-partial`,
+  and stopped: 3 tool calls each (`preplog init`, `preplog list`, `syllabi upcoming`), **no
+  Canvas/NLM/Drive calls and no Telegram message**:
+  ```
+  ## 2026-09-30T08:42:31-04:00 — prep
+  - Sessions considered: 15.662-/-11.383@2026-09-30 notified-partial → notified-partial; 15.385@… ; 15.387@…
+  - Tools called: preplog init ok, preplog list ok, syllabi upcoming ok
+  - Decisions: Skipped prep: all upcoming sessions are already notified-partial, and AGENTS.md forbids further prep work on notified-partial records.
+  - Outcome: nothing to do
+  ```
+  Caveat: the state it was protecting was itself incomplete (see §5), so here "never redo" also
+  meant "never repair".
 
 ## 3. Agent loop
 
@@ -119,9 +188,29 @@ It asks once, marks the session `needs-human`, and moves on to the next class in
 considered (status before → after), tools called and their result codes, decisions (every skip,
 retry, ask, and any dropped hallucinated question), and the outcome.
 
-**[TODO: the run logs from prep → poll → notify for the test class.]**
+**Observed run logs** (full text: [`evidence/run-2026-09-30/operator-transcript.md`](../evidence/run-2026-09-30/operator-transcript.md)).
+The OpenClaw jobs were in fact installed and firing on 9/29–9/30 (`openclaw cron list` shows
+all five `class-prep-*` jobs; poll-b last ran "3h ago"), so the logs below are real unattended
+runs, not hand-triggered ones. Poll ran every half hour in both windows and correctly did nothing
+when nothing was due, for example:
 
-**Scheduling (designed, tested, not enabled):** a sleeping Maritime container runs nothing, and
+```
+## 2026-09-29T20:30:44-04:00 — poll
+- Sessions considered: 15.385@2026-09-30 pending → pending; 15.387@2026-09-30 pending → pending; 15.662-/-11.383@2026-09-30 pending → pending
+- Tools called: preplog init → ok; preplog due → ok
+- Decisions: No podcast-pending records to poll. Send pass skipped for all three due sessions because no stored brief or Drive links exist, and this poll run was restricted to no new prep work.
+- Outcome: nothing sent; no state changes
+```
+
+The 9/29 19:00 **prep** run has no run-log block at all: it created the three records and
+started attempt 1, then stopped before finding readings or writing its log (§5).
+
+**Clock note:** by the time of this eval (11:30 ET on 9/30) 15.662 had already met at 10:00, so
+`syllabi upcoming` no longer listed it. `syllabi upcoming --now 2026-09-29T19:00:00-04:00` (a
+simulated clock at the night-before prep) does list it, with `has_due_before_class: true`
+(the app counts class participation as "due"), so `notify_at` = now, not 06:30.
+
+**Scheduling (installed; ran unattended 9/29–9/30):** a sleeping Maritime container runs nothing, and
 Maritime's CLI triggers can't carry a prompt or a timezone. The design is one Maritime wake
 trigger every 30 minutes plus OpenClaw cron jobs in Eastern time that hold the prompts
 ([`triggers/README.md`](../triggers/README.md)). I tested both halves on 9/24: a job with no wake
@@ -155,8 +244,11 @@ output and rules. A fresh context with only the source material writes a better 
 having no tools means untrusted reading text can't make it do anything.
 
 Evidence:
-- **[TODO: brief-input.md (first lines) and the validated brief-output.json from the run.]**
-- **[TODO: any HALLUCINATION lines from the run log, or "none dropped".]**
+- **Not observed live.** No live run reached the brief step: the 9/29 prep stopped before
+  finding readings, and the planned 9/30 eval run didn't fit before the deadline. So there is no
+  live `brief-input.md`, `brief-output.json` or `HALLUCINATION:` line to show. What *is*
+  verified live is the isolation: on Maritime the spawned `brief-writer` reported `[]` tools
+  (`docs/deploy-maritime.md`, 9/27).
 - Unit tests include planted near-miss questions and forged section headers in the bundle
   (`tests/test_brief.py`).
 
@@ -172,9 +264,38 @@ Expected, per `AGENTS.md`: `NLM_AUTH` → one retry → session marked `partial`
 notify time → one Telegram message asking me to redo the NotebookLM login. After I restore the
 login, the next prep does **only** the podcast step.
 
-**[TODO: what actually happened, with the run log excerpt, the prep-log record showing
-`partial` / `NLM_AUTH`, the Telegram screenshot, and the re-run log showing only the podcast
-step. Save to `evidence/failures/`.]**
+**Result: not run.** It didn't fit in the time left before the deadline. The pieces are
+verified separately (an empty `NOTEBOOKLM_HOME` makes `nlm.py check` return exactly
+`{"error": "NLM_AUTH"}`, 9/29), but the end-to-end recovery (`partial`, the Telegram ask, the
+podcast-only re-run) is **designed, not observed**.
+
+**Failures observed in the real scheduled runs (9/29–9/30).** These are the honest results of the
+live deployment, and they matter more than the planned test:
+
+1. **The 19:00 prep run died partway and left no log.** On 9/29 it created the three records for
+   9/30 and started attempt 1 at 19:01, then stopped: no readings, no Drive upload, no podcast,
+   no brief, and **no run-log block** (there is no `2026-09-29-prep.md`). The likely cause is that
+   `AGENTS.md` (31k chars) was cut at OpenClaw's 20k-char bootstrap limit, so the isolated cron
+   session was missing the later phase rules. `agents.defaults.bootstrapMaxChars` is now 40000
+   (checked on 9/30), but that fix was applied after this run. *Likely, not proven:* the run's
+   transcript wasn't captured.
+2. **A poll sent an empty "brief".** At 22:31 on 9/29 a poll's send pass marked all three
+   sessions as sent (`"brief sent without podcast link"`) even though none had a brief
+   (`has_brief: false`, no Drive links). AGENTS.md says to skip only `needs-human` with no brief
+   and no Drive links, so a `pending` record with nothing in it was still "sent". That poll
+   also wrote no run-log block (the 9/29 log jumps from 21:00 to 23:00). Earlier polls (20:00–21:00)
+   had correctly declined to send in the same state, so the model's behavior differed from run
+   to run.
+3. **Memory then locked in the bad state.** Once `brief_sent_at` was set, the record was
+   `notified-partial`, which prep must never touch. The next morning, three prep runs correctly
+   skipped all three sessions, and 15.662 was never prepared. The never-redo rule worked as
+   designed and made the gap permanent. *Fix to make:* the send pass should refuse to mark a
+   brief sent when the record has no brief and no Drive links (put the guard in `preplog
+   mark-sent`, not in the prompt), and prep should be allowed to finish a `notified-partial`
+   record that has no brief.
+4. **The agent asked to confirm a maintenance command.** On 9/30 it replied "Please confirm you
+   want me to run that exact command." to a `Run: mkdir … && cp -a /data/memory …`, against the
+   Maintenance exception in AGENTS.md. The same command ran when resent.
 
 **Failures found while deploying** (from the verification log in `docs/deploy-maritime.md`):
 - **The model asked for approval nobody would give.** With approvals off, GPT-5.4 still asked me
@@ -194,6 +315,29 @@ instructions (anything that looks like an instruction is ignored and logged as
 `suspected-injection`); only the phase prompts, my Telegram chat id and the owner-only operator chat can start work; secrets
 are redacted from every message and log.
 
+## Traces
+
+**Subagent delegation (live, 9/27; the only live subagent trace).** The main agent spawned
+`brief-writer` through `sessions_spawn` (`mode "run"`, `context "isolated"`) and asked it to list
+its tools. The child's reply was written to `/data/spawn-test.txt` and checked by the main agent:
+`[]`. An earlier config with a hand-written deny list returned a non-empty list, which is how we
+found that only `deny: ["*"]` works. A live brief (bundle → subagent → `brief validate` →
+`set-brief`) was **not** observed; the checking path is unit-tested (`tests/test_brief.py`,
+including planted near-miss questions).
+
+**Successful execution (live, 9/29–9/30).** Scheduled runs with nothing to do behaved correctly:
+the 20:00–21:00 polls declined to send three records with no brief (§3 excerpt), and the
+08:01/08:42/08:48 prep runs read memory, skipped every session and sent nothing (§2 excerpt).
+The 9/30 smoke tests (§1) show all four external tools working.
+
+**Failure and recovery.** Observed failure: the 9/29 prep → 22:31 poll sequence in §5 (no
+recovery: memory locked it in). Observed recoveries: (a) NotebookLM on 9/29: `generate audio`
+failed with `UNCONFIRMED_WRITE` while a PDF was still processing and succeeded on retry minutes
+later, and a `RATE_LIMITED` reply still started a podcast, so `prep` now waits for sources and
+re-checks `artifact list` before retrying (`docs/deploy-maritime.md` verification log);
+(b) 9/30: the agent refused a maintenance `Run:` ("Please confirm…"), and resending the same line
+ran it. The designed `NLM_AUTH` recovery (case 5) was not run.
+
 ## 6. Evaluation
 
 **Baseline:** the same Maritime agent in a fresh chat, told to use only the Canvas skill (no
@@ -206,9 +350,14 @@ questions verbatim from Canvas; 1 = wrong or unusable).
 
 | # | Case | Baseline: success / calls / time / human / quality | Improved: success / calls / time / human / quality |
 | --- | --- | --- | --- |
-| 1 | Class with Canvas PDFs, nothing due | [TODO] | [TODO] |
-| 4 | Already prepped (should stay silent) | [TODO] | [TODO] |
-| 5 | NotebookLM auth broken | [TODO] | [TODO] |
+| 1 | 15.662 on 9/30 (real scheduled run, not the planned eval run) | **Partial** / 10 by its own count (its itemised list adds up to 15) / 3 min 20 s (11:38:02 → 11:41:22 ET, chat round-trip) / 0 / **3** | **N** / unknown (prep left no log) / 19:01 → 22:31 ET on 9/29 to a message with no brief / 0 / **1** |
+| 4 | Already handled (should stay silent) | Not run (no time). By design it has no memory, so a second prompt would redo all the work | **Y** / 3 per run (`preplog init`, `preplog list`, `syllabi upcoming`) / not measured / 0 / n/a |
+| 5 | NotebookLM auth broken | Not applicable: the baseline has no NotebookLM step, so it can't fail or recover | **Not run** (no time before the deadline) |
+
+Quality scores are **graded by Claude Code; Chris to confirm.** Improved case 1 gets 1 because
+nothing usable was delivered. Improved case 4 is the three 9/30 morning prep runs; its setup
+was `notified-partial`, not `done`, and it passed only in the narrow sense (see §5). Tool calls
+are counted from the "Tools called" lines of the run logs.
 
 Full case definitions, including the ones not run: [`evidence/eval/cases.md`](../evidence/eval/cases.md).
 
@@ -217,15 +366,38 @@ the night before) and optional case 6 (prompt injection in Canvas text) need spe
 content that wasn't available in the window before the deadline. The logic for each is in
 `AGENTS.md` and covered by unit tests, but I don't claim live results for them.
 
-**Discussion:** **[TODO: 3–5 sentences. Expected shape: the baseline can find readings and write
-something plausible but has no way to file PDFs, make a podcast or remember what it did, so
-case 4 re-does the work and messages again, and case 5 is either a crash or a silent gap. The
-improved agent costs more tool calls on case 1 but is quiet on case 4 and degrades gracefully on
-case 5.]**
+**Discussion:** The results don't match the shape I expected. The improved agent's memory and
+stop rules did what they were built to do: runs with nothing to do stayed silent and cheap
+(2–3 tool calls, no messages), and nothing was ever done twice. But the one real prep cycle
+failed: prep stopped partway without a log, a later poll marked an empty brief as sent, and the
+never-redo rule then kept anything from repairing it. So on case 1 it delivered nothing useful.
+The baseline, run in a fresh chat with only Canvas, did better on case 1 than the improved
+agent's real run. It found the three readings and the four discussion questions in the Canvas
+assignment and wrote a sensible plan in 3 min 20 s. But it couldn't extract the slide text, filed
+nothing to Drive, made no podcast and sent nothing, and it has no memory for case 4. The lesson is that the guards have to live in the tool, not the prompt:
+the prompt-level rule "don't send without a brief" was followed by some polls and not others,
+while the rules `preplog` enforces in code held every time.
 
 **Limits of this eval:** one run per case, graded by me, on a baseline that is the same agent
 with tools switched off rather than a separately deployed agent. It shows the design choices
 matter; it isn't a statistically strong comparison.
+
+## Reproducing the demonstration
+
+1. Deploy: follow [`docs/deploy-maritime.md`](deploy-maritime.md) §1–§7 (create the OpenClaw agent,
+   clone this repo to `/data/syllabi-agent`, `install-workspace.sh`, connect Telegram, the wake
+   trigger + `install-jobs.sh`, the config patch, then the nlm/rclone/Canvas/syllabi secrets).
+2. Smoke-test (terminal): `maritime chat class-prep-repo "Run: python3 /data/syllabi-agent/workspace/skills/<skill>/scripts/<skill>.py check"`
+   for `nlm` and `drive`, `canvas.py whoami`, and `skills/syllabi/scripts/syllabi check`.
+3. Run a phase: wait for the cron job, or send the text below the `---` line of
+   `triggers/prep.md` (then `poll.md`, `notify.md`) with `maritime chat`, telling the agent to
+   write its summary to a file under `/data/work/`. Read the file with a second `Run: cat` message,
+   because long replies come back as junk.
+4. Inspect: `Run: python3 /data/syllabi-agent/workspace/skills/preplog/scripts/preplog.py get <key>`
+   and `Run: cat /data/logs/<date>-<phase>.md`.
+5. Baseline: send the prompt in [`evidence/eval/baseline/`](../evidence/eval/baseline/) in a fresh chat.
+6. Case 5: `maritime env set class-prep-repo NOTEBOOKLM_HOME=/data/notebooklm-broken --reload`,
+   run prep, then set it back to `/data/notebooklm`.
 
 ## What's still manual
 
@@ -237,11 +409,12 @@ matter; it isn't a statistically strong comparison.
   writes to Canvas.
 - **Refreshing the NotebookLM login** when it expires (unofficial API).
 - **Re-authorizing rclone / Canvas tokens** when they expire or are revoked.
-- **Running the phases:** for this submission I trigger them by hand (§3).
+- **Watching the runs:** nothing alerts me when a run dies without a log (§5, failure 1).
 
 ## Limitations and future work
 
-- **Turn on scheduling:** install the OpenClaw jobs and the 30-minute wake trigger (§3), then
+- **Fix the §5 failures:** a `mark-sent` guard against empty briefs, a way for prep to finish a
+  `notified-partial` record with no brief, and an alert when a run ends without a log. Then
   watch a week of real evening → morning cycles.
 - **Run the remaining eval cases** (2, 3, 6) against real course content, and repeat each case
   more than once.
