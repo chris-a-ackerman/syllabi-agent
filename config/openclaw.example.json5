@@ -27,6 +27,13 @@
       {
         id: "main",
         default: true,
+        // OpenClaw loads at most bootstrapMaxChars (default 20000) of each workspace file and
+        // silently cuts the rest. The installed AGENTS.md (Maritime's block + ours) is ~31k, and
+        // at 20000 the agent lost the state machine, the phases and the stopping conditions
+        // (seen 2026-09-30: "rawChars": 31330, "injectedChars": 19188). The total covers
+        // AGENTS.md + SOUL.md + MARITIME.md. tests/test_instructions.py keeps AGENTS.md under it.
+        bootstrapMaxChars: 40000,
+        bootstrapTotalMaxChars: 80000,
         subagents: { allowAgents: ["brief-writer"], requireAgentId: true },
       },
       // Tool-less brief writer. Its own workspace only needs a tiny AGENTS.md
