@@ -237,8 +237,15 @@ Expected: `[]`. To undo: `cp /data/openclaw.json.pre-subagent ~/.openclaw/opencl
 - The job prompts in `triggers/*.md` now name the `preplog` commands. After pulling that change,
   re-install the jobs so OpenClaw picks up the new text:
   `Run: cd /data/syllabi-agent && git pull && sh scripts/install-jobs.sh --replace`.
+- **Run `sync` before every `maritime restart`.** A restart can leave files written in the last
+  few minutes empty (seen 2026-09-30, twice: after a `git pull`, 8 git objects and the 3 changed
+  files came back as 0-byte files, and so did an `AGENTS.md` backup). `install-workspace.sh`
+  ends with `sync`; after anything else (`git pull`, `openclaw config patch`, writing
+  `rclone.conf`), `Run: sync` first. Repair after it happens:
+  `Run: cd /data/syllabi-agent && mkdir -p /data/git-quarantine && find .git/objects -type f -empty -exec mv {} /data/git-quarantine/ \; && git fetch origin && git reset --hard origin/<branch> && git fsck --no-dangling && sync`
+  (safe: the agent never commits, and runtime data is outside the repo).
 - After the V9 hardening merges (`AGENTS.md`, `SOUL.md` and all three trigger prompts changed):
-  `Run: cd /data/syllabi-agent && git pull && sh scripts/install-workspace.sh && sh scripts/install-jobs.sh --replace`,
+  `Run: cd /data/syllabi-agent && git pull && sh scripts/install-workspace.sh && sh scripts/install-jobs.sh --replace && sync`,
   then apply the config patch from §6 again (`cp ~/.openclaw/openclaw.json /data/openclaw.json.pre-v9`
   first): it raises `agents.defaults.bootstrapMaxChars` to 40000 (in `defaults`: the cron jobs have no
 agent id, so a limit set only on `main` does not reach them). **Without it OpenClaw silently cuts

@@ -52,5 +52,10 @@ mkdir -p "$DATA_DIR/memory" "$DATA_DIR/logs" "$DATA_DIR/readings" "$DATA_DIR/pod
 [ -f "$DATA_DIR/memory/course-notes.md" ] || cp "$SRC/memory-templates/course-notes.md" "$DATA_DIR/memory/course-notes.md"
 [ -f "$DATA_DIR/memory/prep-log.json" ]   || printf '{"version": 1, "sessions": {}}\n' > "$DATA_DIR/memory/prep-log.json"
 
+# 5. Flush to disk. A `maritime restart` soon after a write can leave the file empty (seen
+#    2026-09-30: git objects, AGENTS.md and backups written minutes before a restart came back
+#    as 0-byte files). `sync` makes the install safe to follow with a restart.
+sync
+
 echo "installed $SRC into $WS (backup: $BACKUP)"
 ls -la "$WS"

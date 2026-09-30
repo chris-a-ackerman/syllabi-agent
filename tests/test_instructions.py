@@ -548,6 +548,12 @@ class InstallWorkspaceTests(unittest.TestCase):
         self.assertEqual(read(os.path.join(self.data, "memory", "course-notes.md")),
                          read(os.path.join(WORKSPACE, "memory-templates", "course-notes.md")))
 
+    def test_install_ends_with_sync(self):
+        # A restart soon after a write can leave files empty on Maritime; the install flushes.
+        script = read(INSTALL_WORKSPACE)
+        self.assertRegex(script, r"(?m)^sync$")
+        self.assertLess(script.index("\nsync\n"), script.index('echo "installed'))
+
     def test_rerun_is_idempotent_and_never_overwrites_memory(self):
         self.run_install()
         first = read(os.path.join(self.ws, "AGENTS.md"))
