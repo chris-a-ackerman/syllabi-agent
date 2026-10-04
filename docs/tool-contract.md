@@ -425,3 +425,127 @@ brief send and one podcast-link send per session, `attempts` capped at 3 (`needs
 `MAX_ATTEMPTS`, `notify_chris` once; only a `human`/`manual` `set-status pending --reset-attempts`
 starts over), a `plan` that never lists a recorded step, and an `upsert` that writes nothing when
 nothing changed. It does **not** count tool calls: the 25-per-session budget is the agent's rule.
+
+---
+
+## 9. `forum` skill (the HW3 agent forum: the only Canvas writes)
+
+Implemented as `workspace/skills/forum/scripts/forum.py` (SYL-107, HW3-1; `scripts/forum` is a
+symlink to it). It handles all I/O with one Canvas discussion topic, the *Homework 3: Agent
+Discussion Forum*. The model decides only whether and what to post. Every control below is
+enforced in the script. The `canvas` skill (§2) stays GET-only. `forum.py` copies its transport
+rules rather than importing them, so neither test suite depends on the other.
+
+Config: `CANVAS_BASE_URL` (https only), `CANVAS_FORUM_TOKEN` (falls back to `CANVAS_TOKEN`),
+`CANVAS_FORUM_COURSE_ID` (default `40577`), `CANVAS_FORUM_TOPIC_ID` (**required**, no default),
+`DATA_DIR` (default `/data`), and the `FORUM_FAULT` test hook. Both ids must be numeric. Every
+request path is built from them by `topic_url()`, which accepts only numeric ids and the fixed
+words `view`, `entries`, `replies`, `entry_list`. `_request()` also refuses any path outside
+the topic (or `/api/v1/users/self`), any host but `CANVAS_BASE_URL`'s, and any method but GET
+and the two POSTs below. Next-page links are followed only when they are https on the same host
+and the same path.
+
+Canvas endpoints, base `$CANVAS_BASE_URL/api/v1/courses/{course}/discussion_topics/{topic}`:
+
+| Use | Endpoint |
+| --- | --- |
+| control line, title | `GET ` (the topic; `message` is the description HTML) |
+| the forum | `GET /view` (nested `view[]` with `replies[]`). On 503 or an empty body: `GET /entries` (paginated) + `GET /entries/{id}/replies` |
+| new thread | `POST /entries`, form field `message` |
+| reply | `POST /entries/{entry_id}/replies`, form field `message` |
+| verify | `GET /entry_list?ids[]={id}` |
+| own user id | `GET /api/v1/users/self` (cached in the state file) |
+
+| Command | Inputs | Output (`ok: true` plus) |
+| --- | --- | --- |
+| `read` | `--limit N` (default 50) | `note, control: RUNNING\|PAUSED\|UNKNOWN, control_error?, new: [{id, parent_id, thread_id, author: "user <id>", created_at, text (≤ 4,000), truncated?, context? (≤ 1,000, replies only)}], threads, seen_total, own_posts, pending, remaining?`. `new` = not in memory, not the agent's own user id, not deleted, oldest first. Returned ids are stored as seen. |
+| `post` | `--text-file` (under `$DATA_DIR/work/forum/`), `--reply-to <entry_id>?` | `entry_id, html_url, verified: true, parent_id, attempts, reconciled?`. A duplicate is `duplicate: true, code: FORUM_DUPLICATE, entry_id, html_url` with exit 0, and nothing is posted |
+| `skip` | `--reason` | `decision: "skip", reason, ts` |
+| `status` | | `control, control_checked, halted, halt?, self_user_id, seen_total, own_posts, pending, abandoned, posts_last_hour, rate_limit, consecutive_failures, max_failures, last_cycle_at` (read-only; no Canvas call while halted) |
+| `report` | `--since ISO?` | `markdown` (cycles table: time, new entries read, decision, reason, result; own posts with `html_url`; authors only as `user <id>`), `cycles, posts` |
+
+Global flags: `--now ISO` pins the clock (tests and evals), and `-v` logs `<method> <path>` to stderr.
+
+`post` runs these checks **in this order** and stops at the first that fails:
+
+1. **Halt file** `$DATA_DIR/memory/forum-halt` exists → `FORUM_HALTED` (no Canvas call).
+2. **Reconcile** pending intents (below). One still pending and under 2 minutes old → `FORUM_PENDING`.
+3. **Control line**: a fresh GET of the topic on every post, never cached. The first non-empty line
+   of the HTML-stripped description must be `COURSE-TEAM CONTROL: RUNNING` (case-insensitive,
+   surrounding whitespace ignored). `…: PAUSED` → `FORUM_PAUSED`. Anything else, including a missing
+   line or a failed GET, → `FORUM_CONTROL_UNKNOWN`. A `CANVAS_401` is reported as itself and halts.
+4. **Text**: 1–2,000 characters after trimming. `FORUM_TEXT` if it contains the value (8+
+   characters) of any env var whose name contains `TOKEN`, `KEY`, `SECRET`, `PASSWORD` or
+   `COOKIE`, or the text `syl_agent_` (any case). The file must be under `$DATA_DIR/work/forum/`
+   after resolving symlinks (`USAGE`).
+5. **Target**: `--reply-to` must be a live entry in the current forum view and not the agent's own
+   → `FORUM_BAD_TARGET`.
+6. **Duplicates**: same parent + same normalized-text hash in `posts`, or among the agent's own
+   entries in the view → `FORUM_DUPLICATE` (exit 0). A second reply to the same parent (memory or
+   view) → `FORUM_ALREADY_REPLIED`.
+7. **Rate**: 3 posts in the trailing 60 minutes, counted as the larger of `post_times` in memory
+   and the agent's own entries in the view by `created_at` (so a lost state file can't raise it)
+   → `FORUM_RATE`.
+8. **Intent**: `pending += {intent_id, parent_id, hash, text, created_at}`, saved **before** the POST.
+9. **POST**: up to 3 attempts inside a 45 s budget (Maritime caps a command at 60 s). The pause
+   before retry *n* is `2^n` s (2, then 4), or a 429's `Retry-After` when that is longer (cap 20 s).
+   A timeout, a 5xx or an unreadable 2xx is ambiguous: the post may have been saved. Before every
+   retry the forum is re-read and reconciled, and a retry is never blind. An unreadable 2xx is not
+   retried at all. A 4xx other than 429 is not retried, and its intent is abandoned. A final
+   ambiguous failure leaves the intent pending for the next command.
+10. **Verify**: `GET entry_list?ids[]=<id>`. The entry must exist, belong to the agent's user id
+    and match the hash. Only then does the intent move to `posts` with `entry_id, html_url,
+    posted_at, verified: true` (otherwise `FORUM_VERIFY`, with the id kept on the pending intent).
+
+**Reconcile** (the idempotency rule) runs at the start of `read` and `post`, and before every POST
+retry. For each pending intent, look in the current view for an entry by the agent's own user id
+whose normalized-text hash equals the intent's, with the same parent (or the entry id the POST
+already returned). Found → it moves to `posts` (`reconciled: true`), a `reconcile` line is logged,
+and it is not posted again. Not found and older than 2 minutes → `abandoned`, and the next `post`
+may try it as a fresh intent. Normalized text = HTML stripped, entities decoded, NFKC, whitespace
+collapsed, lowercased. Canvas rewrites HTML, so raw bodies are never compared. Posts go out as
+escaped plain text, one `<p>` per paragraph (`<br>` for single newlines), and the hash is taken
+of that HTML.
+
+**Memory.** `$DATA_DIR/memory/forum-state.json` = `{version: 1, self_user_id, seen: {entry_id:
+first_seen_at}, posts: [...], pending: [...], abandoned: [...], post_times: [...],
+consecutive_failures, last_cycle_at}`. It is written atomically (temp file + rename) under an
+`fcntl` lock on `forum-state.json.lock`, as `preplog` does. A corrupt or unreadable file →
+`FORUM_STATE`, and it is never replaced. `$DATA_DIR/logs/forum.jsonl` gets one line per
+`read`/`post`/`skip` (plus `reconcile` events): `{ts, command, new_count, decision:
+post|skip|refused|error|null, reason, entry_id, error_code, attempts}`, plus `fault`/`fault_ok`
+when `FORUM_FAULT` is set. It never holds the token, headers or other agents' post bodies.
+`status` and `report` write nothing.
+
+**Stopping rule.** Every `read` or `post` ending in an error other than `FORUM_PAUSED`,
+`FORUM_RATE`, `FORUM_DUPLICATE`, `FORUM_ALREADY_REPLIED` or `FORUM_PENDING` increments
+`consecutive_failures`. `FORUM_HALTED` and `FORUM_STATE` are not counted, since there is nothing
+to write. Any success resets it to 0. At 3, `$DATA_DIR/memory/forum-halt` is written (JSON:
+`halted_at, reason, error_code`). `CANVAS_401` writes it immediately. While the file exists,
+`post` refuses and `read` returns `FORUM_HALTED` without calling Canvas. Only a human deletes it.
+After that, the counter starts again from 0.
+
+**Fault injection.** `FORUM_FAULT=lost_ack` together with `FORUM_FAULT_OK=1` performs the real POST,
+then behaves as if the answer timed out. It does not read the id, skips verify, exits 2 with
+`CANVAS_NET`, and leaves the intent pending. The next command reconciles it to the saved entry
+without a second POST. Without `FORUM_FAULT_OK=1` the hook is ignored (logged as `fault_ignored`).
+
+| code | when | retryable | agent action |
+| --- | --- | --- | --- |
+| `FORUM_HALTED` | the halt file exists | no | stop forum work; tell Chris once |
+| `FORUM_PAUSED` | control line says PAUSED | no | `forum skip` |
+| `FORUM_CONTROL_UNKNOWN` | control line missing/garbled, or the topic GET failed (`detail.cause`) | no | `forum skip` |
+| `FORUM_TEXT` | empty, > 2,000 chars, a secret value or `syl_agent_` | no | rewrite next cycle |
+| `FORUM_BAD_TARGET` | `--reply-to` not a live entry in the topic, or own entry | no | pick an id from `read` |
+| `FORUM_DUPLICATE` | (exit 0, `duplicate: true`) same parent + same text already posted | — | treat as done |
+| `FORUM_ALREADY_REPLIED` | a reply to that parent already exists | no | don't reply again |
+| `FORUM_RATE` | 3 posts in the last 60 minutes | no | skip |
+| `FORUM_PENDING` | an earlier intent is unresolved and < 2 minutes old | no | skip; next cycle reconciles |
+| `FORUM_VERIFY` | the returned entry is missing, not ours, or a different text | no | skip; next cycle reconciles by id |
+| `FORUM_STATE` | state file corrupt/unreadable (never replaced) | no | a human repairs it |
+| `CANVAS_401` | bad/missing token (halts at once) | no | ask Chris for a new token |
+| `CANVAS_403`, `CANVAS_404` | forbidden / not found | no | skip |
+| `CANVAS_RATE`, `CANVAS_NET` | throttled, 5xx, timeout, non-JSON. After a POST these are `retryable: false`, because the tool already retried | see `retryable` | skip; next cycle reconciles |
+| `USAGE` | bad arguments/config | no | fix the call |
+
+Tests (fake transport, no network): `tests/test_forum.py`, run with `python3 -m unittest discover -s tests`.
