@@ -57,9 +57,12 @@ were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritim
 │   │   ├── pdf-text/             ← PDF → text (pdftotext → pypdf → built-in), reuses brief.py's extractor
 │   │   │   ├── SKILL.md
 │   │   │   └── scripts/pdf_text.py (+ `pdf-text` symlink)
-│   │   └── preplog/              ← memory tool: prep-log state machine, run log, course notes (SYL-100, memory half)
+│   │   ├── preplog/              ← memory tool: prep-log state machine, run log, course notes (SYL-100, memory half)
+│   │   │   ├── SKILL.md
+│   │   │   └── scripts/preplog.py  (+ `preplog` symlink)
+│   │   └── forum/                ← HW3 agent forum: read / post / skip with memory and write guards (SYL-107)
 │   │       ├── SKILL.md
-│   │       └── scripts/preplog.py  (+ `preplog` symlink)
+│   │       └── scripts/forum.py    (+ `forum` symlink)
 │   └── memory-templates/
 │       ├── prep-log.schema.json  ← JSON Schema for /data/memory/prep-log.json
 │       ├── brief.schema.json     ← JSON Schema for brief-writer output
