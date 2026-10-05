@@ -32,6 +32,8 @@ podcasts/
 *.m4a
 
 # Tooling
+# scripts/make-submission-zip.sh output
+dist/
 __pycache__/
 *.pyc
 .venv/

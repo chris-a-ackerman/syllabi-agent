@@ -315,9 +315,9 @@ class ConfigTests(ForumTestCase):
     def test_token_falls_back_to_canvas_token(self):
         env = dict(self.env)
         del env["CANVAS_FORUM_TOKEN"]
-        env["CANVAS_TOKEN"] = "fallback-token-0987654321"
+        env["CANVAS_TOKEN"] = "fallback.token.0987654321"
         self.ok("read", env=env)
-        self.assertEqual(self.fake.calls[0][2]["Authorization"], "Bearer fallback-token-0987654321")
+        self.assertEqual(self.fake.calls[0][2]["Authorization"], "Bearer fallback.token.0987654321")
 
     def test_missing_token_is_canvas_401_without_network(self):
         env = dict(self.env)
