@@ -3,6 +3,7 @@
 An OpenClaw agent, hosted on [Maritime](https://maritime.sh), that gets me ready for each class.
 Homework 2 for MIT AI Studio (MAS.665): *Engineer a Reliable Agent*.
 
+
 Deploying means creating an agent from Maritime's OpenClaw template, cloning this repo onto its
 persistent volume, running two install scripts, and adding one Maritime wake trigger. The steps
 were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritime.md).
@@ -34,7 +35,9 @@ were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritim
 │   └── openclaw.example.json5    ← openclaw.json settings to merge in (subagent still untested)
 ├── scripts/
 │   ├── install-workspace.sh      ← merges workspace/ into Maritime's OpenClaw workspace (re-run after git pull)
-│   └── install-jobs.sh           ← creates the 5 OpenClaw cron jobs (ET) from triggers/*.md
+│   ├── install-jobs.sh           ← creates the 6 OpenClaw cron jobs (ET) from triggers/*.md
+│   ├── make-submission-zip.sh    ← HW3 ZIP from git HEAD; refuses secrets and runtime files (SYL-109)
+│   └── redact-evidence.py        ← stdin → stdout: secrets, emails, other users' ids out of evidence (SYL-109)
 ├── workspace/                    ← our half of the OpenClaw workspace (installed by install-workspace.sh)
 │   ├── AGENTS.md                 ← operating instructions: phases, stop rules, ask-a-human, hard rules
 │   ├── SOUL.md                   ← persona / tone / boundaries
@@ -71,11 +74,13 @@ were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritim
 │   ├── README.md                 ← how scheduling works: 1 Maritime wake trigger + 5 OpenClaw jobs (ET)
 │   ├── prep.md                   ← exact prompt of the 19:00 job
 │   ├── poll.md                   ← exact prompt of the 30-min poll jobs
-│   └── notify.md                 ← exact prompt of the 06:30 job
+│   ├── notify.md                 ← exact prompt of the 06:30 job
+│   └── forum.md                  ← exact prompt of the 3-hourly HW3 forum job
 ├── docs/
 │   ├── deploy-maritime.md        ← verified deploy runbook + what we learned about Maritime
 │   ├── tool-contract.md          ← every tool: name, inputs, outputs, error shape
-│   └── hw2-writeup.md            ← HW2 writeup skeleton (one heading per rubric item)
+│   ├── hw2-writeup.md            ← HW2 writeup (+ hw2-writeup.pdf)
+│   └── hw3-writeup.md            ← HW3 writeup: forum agent (live evidence pasted in HW3-4)
 ├── tests/
 │   ├── test_drive.py             ← drive skill tests, no network
 │   ├── test_nlm.py               ← nlm skill tests, no network: python3 -m unittest discover -s tests
@@ -84,6 +89,9 @@ were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritim
 │   ├── test_pdf_text.py          ← unit tests for the pdf-text helper
 │   ├── test_preplog.py           ← unit tests for the preplog skill (no network)
 │   ├── test_canvas.py            ← canvas skill tests, no network
+│   ├── test_forum.py             ← forum skill tests, fake Canvas, no network
+│   ├── test_redact.py            ← redact-evidence.py tests
+│   ├── test_submission_zip.py    ← make-submission-zip.sh tests (throwaway git repos)
 │   └── test_instructions.py      ← pins the hard rules in the instruction files and the deploy merge (python3 -m unittest discover -s tests -v)
 └── evidence/
     ├── eval/cases.md             ← the 5 eval cases + the injection case, baseline vs improved (results blank)
@@ -105,6 +113,71 @@ At runtime (on the Maritime volume, never in git). `HOME` is `/data`:
 ├── notebooklm/                   ← NOTEBOOKLM_HOME: agent-account auth (700 / 600)
 └── rclone/rclone.conf
 ```
+
+---
+
+## HW3: forum agent
+
+For Homework 3 the same agent also takes part in the *Homework 3: Agent Discussion Forum* (one
+Canvas discussion topic in course 40577) with no human prompting: an OpenClaw cron job runs one
+cycle every 3 hours, in which it reads new entries and then either posts one reply or thread or
+records a deliberate skip. Every control (the course team's pause line, duplicates, 3 posts per
+hour, verification of each post, a halt after 3 failures) is enforced in the `forum` skill's
+script, not in the prompt. Writeup: [`docs/hw3-writeup.md`](docs/hw3-writeup.md); tool contract:
+[`docs/tool-contract.md`](docs/tool-contract.md) §9.
+
+Setup, on top of a working HW2 deploy ([`docs/deploy-maritime.md`](docs/deploy-maritime.md);
+agent `class-prep-repo`, `CANVAS_BASE_URL=https://canvas.mit.edu` already set):
+
+1. **Create a Canvas token just for the forum.** In Canvas: Account → Settings → Approved
+   Integrations → **+ New Access Token**. Purpose "HW3 agent forum", expiry a few days after the
+   due date. Copy it once; Canvas won't show it again. Canvas tokens can't be scoped, so treat it
+   like a password and revoke it after grading.
+2. **Find the topic id.** Open the forum in Canvas. The URL ends in
+   `/courses/40577/discussion_topics/<topic id>`.
+3. **Set both as secrets** (terminal; never put them in git):
+   ```
+   maritime env set class-prep-repo CANVAS_FORUM_TOKEN='<token>' --reload
+   maritime env set class-prep-repo CANVAS_FORUM_TOPIC_ID='<topic id>' --reload
+   ```
+   `CANVAS_FORUM_COURSE_ID` defaults to `40577`.
+4. **Install the workspace** (agent chat). This copies the skill, `AGENTS.md` and
+   `forum-notes.md` into the OpenClaw workspace:
+   ```
+   Run: cd /data/syllabi-agent && git pull && sh scripts/install-workspace.sh
+   ```
+5. **Install the job** (agent chat). This adds `class-prep-forum` (`0 */3 * * *`, America/New_York)
+   next to the HW2 jobs and skips the ones that exist; the existing `*/30` Maritime wake trigger
+   already covers it:
+   ```
+   Run: sh /data/syllabi-agent/scripts/install-jobs.sh
+   ```
+   Check: `openclaw cron list` shows `class-prep-forum`.
+6. **Smoke test** (agent chat; read-only, posts nothing):
+   ```
+   Run: python3 /data/syllabi-agent/workspace/skills/forum/scripts/forum.py status
+   ```
+   Expect `"ok": true`, `"control": "RUNNING"`, `"halted": false` and a numeric `self_user_id`.
+   `CANVAS_401` means the token is wrong; `USAGE` means the topic id is missing.
+7. **Pause.** The course team controls the first line of the topic: `COURSE-TEAM CONTROL: PAUSED`
+   (or anything other than `RUNNING`) makes every cycle record a skip and post nothing. Nothing
+   to change on the agent; it resumes when the line says `RUNNING` again.
+8. **Stop.** Either write the halt file, which blocks every read and post until a human deletes it
+   (the tool also writes it itself after 3 failures in a row or a rejected token):
+   ```
+   Run: echo '{"reason": "stopped by Chris"}' > /data/memory/forum-halt
+   Run: rm /data/memory/forum-halt                      # to resume
+   ```
+   or remove the job: `openclaw cron list` for its id, then `openclaw cron rm <id>`
+   (`install-jobs.sh` puts it back). To end it for good, also revoke the token in Canvas.
+9. **Run the tests** (locally, no network, no secrets):
+   ```
+   python3 -m unittest discover -s tests
+   ```
+
+For the submission: `forum.py report | jq -r .markdown | python3 scripts/redact-evidence.py`
+(agent chat, from `/data/syllabi-agent`) gives the redacted cycle table for the writeup, and `sh scripts/make-submission-zip.sh` builds `dist/syllabi-agent-hw3.zip`
+from the committed tree, refusing it if any secret or runtime file got in.
 
 ---
 
@@ -333,3 +406,5 @@ venv at `/data/venvs/nlm` with `NLM_BIN` pointing at it (see the deploy runbook 
 `NLM_BIN` and the NotebookLM login survive `maritime restart` (checked the same day). rclone
 v1.75.1 runs from `/data/bin/rclone` (`DRIVE_RCLONE_BIN`), and it and the Drive config survive
 `maritime restart` (checked 2026-09-29).
+
+### Comment to commit the branch
