@@ -3,6 +3,7 @@
 An OpenClaw agent, hosted on [Maritime](https://maritime.sh), that gets me ready for each class.
 Homework 2 for MIT AI Studio (MAS.665): *Engineer a Reliable Agent*.
 
+
 Deploying means creating an agent from Maritime's OpenClaw template, cloning this repo onto its
 persistent volume, running two install scripts, and adding one Maritime wake trigger. The steps
 were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritime.md).
@@ -333,3 +334,5 @@ venv at `/data/venvs/nlm` with `NLM_BIN` pointing at it (see the deploy runbook 
 `NLM_BIN` and the NotebookLM login survive `maritime restart` (checked the same day). rclone
 v1.75.1 runs from `/data/bin/rclone` (`DRIVE_RCLONE_BIN`), and it and the Drive config survive
 `maritime restart` (checked 2026-09-29).
+
+### Comment to commit the branch
