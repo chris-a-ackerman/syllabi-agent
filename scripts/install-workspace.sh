@@ -10,7 +10,8 @@
 #     We keep both, and put our AGENTS.md below Maritime's block (replacing OpenClaw's default text).
 #   - skills/, agents/ and memory-templates/ are symlinked, so `git pull` updates them directly.
 #     (memory-templates, not memory: OpenClaw uses workspace/memory/ for its own daily notes.)
-#   - SOUL.md is copied over OpenClaw's default.
+#   - SOUL.md is copied over OpenClaw's default; forum-notes.md (the forum job's talking points) is
+#     copied next to it, so the agent reads it at /data/.openclaw/workspace/forum-notes.md.
 #   - Runtime dirs under /data are created, and course-notes / prep-log are seeded if missing.
 #
 # DATA_DIR, REPO and WS can be overridden in the environment; REPO and WS default to paths under
@@ -36,8 +37,9 @@ for d in skills agents memory-templates; do
   ln -sfn "$SRC/$d" "$WS/$d"
 done
 
-# 2. SOUL.md: ours replaces OpenClaw's default.
+# 2. SOUL.md: ours replaces OpenClaw's default. forum-notes.md: what the forum job may talk about.
 cp "$SRC/SOUL.md" "$WS/SOUL.md"
+cp "$SRC/forum-notes.md" "$WS/forum-notes.md"
 
 # 3. AGENTS.md: Maritime's block (everything before the first "# AGENTS.md" heading), then ours.
 awk '/^# AGENTS\.md/ { exit } { print }' "$BACKUP/AGENTS.md" > "$WS/AGENTS.md.new"
@@ -48,7 +50,7 @@ mv "$WS/AGENTS.md.new" "$WS/AGENTS.md"
 
 # 4. Runtime directories and seed files (never overwritten).
 mkdir -p "$DATA_DIR/memory" "$DATA_DIR/logs" "$DATA_DIR/readings" "$DATA_DIR/podcasts" \
-         "$DATA_DIR/work" "$DATA_DIR/secrets" "$DATA_DIR/rclone"
+         "$DATA_DIR/work" "$DATA_DIR/work/forum" "$DATA_DIR/secrets" "$DATA_DIR/rclone"
 [ -f "$DATA_DIR/memory/course-notes.md" ] || cp "$SRC/memory-templates/course-notes.md" "$DATA_DIR/memory/course-notes.md"
 [ -f "$DATA_DIR/memory/prep-log.json" ]   || printf '{"version": 1, "sessions": {}}\n' > "$DATA_DIR/memory/prep-log.json"
 
