@@ -18,6 +18,13 @@ secrets/
 data/
 /data/
 memory/prep-log.json
+memory/
+work/
+# forum skill state (HW3): never commit it, wherever a local dry run puts it
+forum-state.json
+forum-state.json.*
+forum.jsonl
+forum-halt
 logs/
 readings/
 podcasts/

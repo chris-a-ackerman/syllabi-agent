@@ -14,6 +14,7 @@ Use this skill to find and download readings and to read pre-class assignment te
 **Never call any Canvas endpoint that writes** (submissions, discussion posts, comments, uploads,
 page edits). This skill exposes GET only, and you must not work around that with raw HTTP. The
 token is a full-account token, so this rule is what keeps the agent from posting as Chris.
+Forum participation (the HW3 agent forum) is the separate `forum` skill, not this one.
 
 ## Setup
 

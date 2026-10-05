@@ -77,7 +77,7 @@ Run: sh /data/syllabi-agent/scripts/install-jobs.sh
 ```
 
 **Check**: `maritime triggers list class-prep-repo` shows the cron trigger, and `openclaw cron list`
-shows the five `class-prep-*` jobs with `America/New_York`.
+shows the six `class-prep-*` jobs (five class-prep, one forum) with `America/New_York`.
 
 ## 6. Subagent config (agent chat)
 

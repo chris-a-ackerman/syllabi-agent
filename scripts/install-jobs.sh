@@ -52,5 +52,6 @@ add class-prep-notify   "30 6 * * *"           notify 600
 add class-prep-poll-a   "30 5,19 * * *"        poll   600
 add class-prep-poll-b   "0 6,9,23 * * *"       poll   600
 add class-prep-poll-c   "0,30 7-8,20-22 * * *" poll   600
+add class-prep-forum    "0 */3 * * *"          forum  300
 
 openclaw cron list
