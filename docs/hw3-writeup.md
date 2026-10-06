@@ -4,13 +4,29 @@ Setup: [`README.md`, "HW3: forum agent"](../README.md#hw3-forum-agent). Tool con
 [`docs/tool-contract.md` §9](tool-contract.md#9-forum-skill-the-hw3-agent-forum-the-only-canvas-writes).
 
 > **Status.** Everything below is built and unit-tested offline (`tests/test_forum.py`, fake
-> Canvas, no network). What is marked *observed* was seen in the live run on Maritime; everything
-> marked *designed* is in the code and the tests but was not seen live. The live evidence goes in
-> the three `EVIDENCE` sections.
+> Canvas, no network). It ran live on Maritime from Oct 5, 19:30 ET: 9 posts over 10 scheduled
+> cycles, plus a live lost-acknowledgement test that ended with one copy of the post (§1, §4, §5).
+> What is marked *observed* was seen in that run. What is marked *designed* is in the code and the
+> tests but was not seen live.
 
 ## 1. Thread links
 
-<!-- EVIDENCE: thread links -->
+Forum: [Homework 3: Agent Discussion Forum](https://canvas.mit.edu/courses/40577/discussion_topics/448963)
+(course 40577, topic 448963). Every post below was made by a scheduled cron cycle with no human
+prompt. All are replies to other agents' entries, which the decision rule prefers over new
+threads. Times are ET.
+
+| # | Posted (ET) | Reply to entry | Post |
+| --- | --- | --- | --- |
+| 1 | Oct 5, 19:30 | 229515 | [entry 230213](https://canvas.mit.edu/courses/40577/discussion_topics/448963#entry-230213) |
+| 2 | Oct 5, 21:00 | 229609 | [entry 230233](https://canvas.mit.edu/courses/40577/discussion_topics/448963#entry-230233) |
+| 3 | Oct 6, 00:00 | 229788 | [entry 230300](https://canvas.mit.edu/courses/40577/discussion_topics/448963#entry-230300), the lost-ack test post (§5) |
+| 4 | Oct 6, 04:30 | 230069 | [entry 230361](https://canvas.mit.edu/courses/40577/discussion_topics/448963#entry-230361) |
+| 5 | Oct 6, 06:30 | 230313 | [entry 230384](https://canvas.mit.edu/courses/40577/discussion_topics/448963#entry-230384) |
+| 6 | Oct 6, 09:00 | 230383 | [entry 230406](https://canvas.mit.edu/courses/40577/discussion_topics/448963#entry-230406) |
+| 7 | Oct 6, 12:00 | 230408 | [entry 230481](https://canvas.mit.edu/courses/40577/discussion_topics/448963#entry-230481) |
+| 8 | Oct 6, 15:00 | 230497 | [entry 230569](https://canvas.mit.edu/courses/40577/discussion_topics/448963#entry-230569) |
+| 9 | Oct 6, 15:23 | 230599 | [entry 230615](https://canvas.mit.edu/courses/40577/discussion_topics/448963#entry-230615) |
 
 ## 2. Code and setup
 
@@ -67,11 +83,13 @@ travels only in a header over https to that host, and is never logged. The HW2 `
 stays GET-only.
 
 **Decision logic.** From `triggers/forum.md`, the agent posts only if at least one is true:
-(a) a new entry asks something, or describes a problem, that `forum-notes.md` answers with a
-specific fact; (b) a new entry replies to one of its posts and a follow-up would add something
-new; (c) it has no posts yet and no existing thread fits, so it starts one on a topic from the
-notes. Otherwise it runs `forum skip --reason "<why>"`. One post per cycle at most, 60–180 words,
-replies preferred over new threads, and no claim that is not in the notes.
+(a) a new entry asks a direct question that `forum-notes.md` answers with a specific fact, and
+no other new entry has answered it yet; (b) a new entry replies to one of its posts and a
+follow-up would add something new; (c) it has no posts yet and no existing thread fits, so it
+starts one on a topic from the notes. Being related to the notes is not enough, and when unsure
+it skips. Otherwise it runs `forum skip --reason "<why>"`. One post per cycle at most, 40–120
+words of plain prose, replies preferred over new threads, and no claim that is not in the notes.
+(Rule (a) was narrowed on Oct 6; the earlier, looser version posted every cycle, see §4.)
 
 **Local persistent memory.** `/data/memory/forum-state.json` holds the ids already seen, the
 agent's own posts (entry id, parent, text hash, URL), pending intents, post times, abandoned
@@ -105,7 +123,52 @@ The output of `forum report` (cycle table and own posts with links), passed thro
 `scripts/redact-evidence.py`. It must show several scheduled cycles and at least one deliberate
 skip.
 
-<!-- EVIDENCE: forum report -->
+Two sources are joined here. The first is OpenClaw's run history for the job
+(`openclaw cron runs`: start time, status, duration). The second is the tool's own log
+(`forum.jsonl`, via `forum report`). Full redacted output is in
+[`evidence/run-2026-10-05/`](../evidence/run-2026-10-05/) (`forum-report.md`,
+`forum-log-excerpts.txt`, `forum-status.txt`).
+
+| Run start (ET) | Trigger | Cron status | Forum tool | Outcome |
+| --- | --- | --- | --- | --- |
+| Oct 5, 19:02 | operator smoke test (manual) | n/a | `read`: 50 new | read only, before scheduling |
+| Oct 5, 19:30 | one-time job `class-prep-forum-test` | ok | `read`, `post` | reply, entry 230213 |
+| Oct 5, 21:00 | `class-prep-forum` | ok, 32 s | `read`, `post` | reply, entry 230233 |
+| Oct 6, 00:00 | `class-prep-forum`, **fault injected** | ok, 35 s | `read`, `post` → `CANVAS_NET` | lost ack; agent did not retry (§5) |
+| Oct 6, 03:00 | `class-prep-forum` | **timeout**, 1798 s | `reconcile` 230300, `read` | intent resolved, no new post; model call hung |
+| Oct 6, 03:30 | OpenClaw retry | **timeout**, 1772 s | `read` | no post; model call hung |
+| Oct 6, 04:30 | OpenClaw retry | ok, 39 s | `read`, `post` | reply, entry 230361 |
+| Oct 6, 06:00 | `class-prep-forum` | **timeout**, 1792 s | `read` | no post; model call hung |
+| Oct 6, 06:30 | OpenClaw retry | ok, 39 s | `read`, `post` | reply, entry 230384 |
+| Oct 6, 09:00 | `class-prep-forum` | ok, 46 s | `read` (24 new), `post` | reply, entry 230406 |
+| Oct 6, 12:00 | `class-prep-forum` | ok, 34 s | `read` (35 new), `post` | reply, entry 230481 |
+| Oct 6, 15:00 | `class-prep-forum` | **timeout**, 1373 s | `read` (38 new), `post` | reply, entry 230569, *then* the model call hung |
+| Oct 6, 15:23 | OpenClaw retry | ok, 42 s | `read` (5 new), `post` | reply, entry 230615 |
+
+`forum status` after the 15:23 run: `control: RUNNING`, `halted: false`, `own_posts: 9`,
+`pending: 0`, `abandoned: 0`, `consecutive_failures: 0`, `posts_last_hour: 2` (limit 3),
+`seen_total: 552`.
+
+**Observed.** Ten scheduled cycles plus three automatic retries ran over about 20 hours with no
+human prompt. Every finished cycle posted exactly one reply. The rate limit, dedupe and
+verification never had to refuse anything. Every post went to a different parent entry.
+
+**Deliberate skip.** No finished cycle in this window ran `forum skip`. The three runs that read
+the forum and posted nothing were model timeouts, not decisions. The original rule ("a new entry
+asks something that the notes answer") matched something in every batch of 24–50 new entries. On
+Oct 6 I narrowed it in `triggers/forum.md`: only a direct question that no other entry has
+answered, "if you are unsure, skip", and "most cycles should end in a skip". The redeployed job's
+skips:
+
+<!-- EVIDENCE: forum skip line(s) after the rule change: time ET, reason -->
+
+**Timeouts.** In four runs the model call never returned. OpenClaw killed each one after
+23–30 minutes (the job's 300 s limit was not enforced at that phase) and re-ran it. No state was
+lost: the 03:00 run had already reconciled the pending intent before it hung. One timed-out run
+(15:00) had already posted, and its retry posted again 23 minutes later, to a different entry.
+So one 3-hour slot produced two posts. The tool's limits (3 per hour, one reply per parent) were
+not broken. The prompt's "one post per cycle" rule was, because the tool counts a retry as a new
+cycle (§7).
 
 ## 5. Failure and recovery
 
@@ -119,7 +182,30 @@ records it as posted (`reconciled: true`, a `reconcile` line in `forum.jsonl`), 
 The forum then shows exactly one copy. Both fault values are logged, and without
 `FORUM_FAULT_OK=1` the hook is ignored.
 
-<!-- EVIDENCE: lost_ack log lines + thread link showing one copy -->
+**Observed live (Oct 6).** `FORUM_FAULT=lost_ack` and `FORUM_FAULT_OK=1` were set on the agent
+before the 00:00 ET cycle and removed after it. From `forum.jsonl`
+([`forum-log-excerpts.txt`](../evidence/run-2026-10-05/forum-log-excerpts.txt)):
+
+```
+{"command": "read",      "fault": "lost_ack", "fault_ok": true, "new_count": 50, "ts": "2026-10-06T04:00:17Z"}
+{"command": "post",      "decision": "error", "error_code": "CANVAS_NET", "attempts": 1, "fault": "lost_ack", "fault_ok": true,
+                         "reason": "no response to the POST (FORUM_FAULT=lost_ack); the next command reconciles it", "ts": "2026-10-06T04:00:30Z"}
+{"command": "reconcile", "decision": "post", "entry_id": 230300, "reason": "reconciled", "ts": "2026-10-06T07:00:15Z"}
+```
+
+1. **Injected failure.** Canvas saved the reply to entry 229788. The tool dropped the response
+   and returned `CANVAS_NET` with the intent still `pending`.
+2. **Agent behaviour.** The cron run summary for that cycle reads: *"Tried one forum reply this
+   cycle, to entry `229788`, and the post returned `CANVAS_NET` with a lost acknowledgement. I
+   did not retry. The next cycle will reconcile it."* That follows trigger step 6.
+3. **Recovery.** At the start of the next scheduled cycle (03:00 ET), the tool reconciled before
+   anything else. It found its own entry under 229788 with the same content hash and recorded it
+   as entry 230300 (`reconciled: true`). It made no POST.
+4. **No duplicate.** There was one POST and one entry:
+   [entry 230300](https://canvas.mit.edu/courses/40577/discussion_topics/448963#entry-230300).
+   `forum report` lists it once, and later status shows `pending: 0`, `abandoned: 0`. The
+   one-reply-per-parent guard would also have refused a second reply to 229788 had the model
+   tried one.
 
 **Offline tests** (`tests/test_forum.py`, fake Canvas; `python3 -m unittest discover -s tests`):
 
@@ -162,6 +248,15 @@ The forum then shows exactly one copy. Both fault values are logged, and without
 
 - **Single live run.** The schedule, posts, skips and lost-ack recovery are seen live only in the
   window before the deadline (§1, §4, §5). Anything without live evidence there stays *designed*.
+- **The first decision rule was too loose.** With 24–50 new entries per cycle, "the notes answer
+  something here" was true every time, so the agent never skipped. The rule was narrowed during
+  the run (§3, §4).
+- **Hung model calls.** Four of 13 runs timed out inside the model call. The job's 300 s limit
+  did not stop them; OpenClaw killed them after 23–30 minutes and re-ran the job. Retries are
+  safe for state, because reconcile runs first and every write goes through the tool. But a run
+  that posted and *then* hung was retried and posted again (15:00 and 15:23 ET). "One post per
+  cycle" holds only per run. The fix belongs in the tool: refuse a second post within the same
+  3-hour slot. That fix is not built.
 - **Judgement is still the model's.** The script guarantees how often and where it posts, not
   whether a post is useful. The quality of the decision depends on GPT-5.4 and on
   `forum-notes.md`, which is a fixed list of lessons from this repo.
