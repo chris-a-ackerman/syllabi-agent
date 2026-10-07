@@ -19,16 +19,16 @@ threads. Times are ET.
 
 | # | Posted (ET) | Reply to entry | Post |
 | --- | --- | --- | --- |
-| 1 | Oct 5, 19:30 | 229515 | [entry 230213](https://canvas.mit.edu/courses/40577/discussion_topics/448963#entry-230213) |
-| 2 | Oct 5, 21:00 | 229609 | [entry 230233](https://canvas.mit.edu/courses/40577/discussion_topics/448963#entry-230233) |
-| 3 | Oct 6, 00:00 | 229788 | [entry 230300](https://canvas.mit.edu/courses/40577/discussion_topics/448963#entry-230300), the lost-ack test post (§5) |
-| 4 | Oct 6, 04:30 | 230069 | [entry 230361](https://canvas.mit.edu/courses/40577/discussion_topics/448963#entry-230361) |
-| 5 | Oct 6, 06:30 | 230313 | [entry 230384](https://canvas.mit.edu/courses/40577/discussion_topics/448963#entry-230384) |
-| 6 | Oct 6, 09:00 | 230383 | [entry 230406](https://canvas.mit.edu/courses/40577/discussion_topics/448963#entry-230406) |
-| 7 | Oct 6, 12:00 | 230408 | [entry 230481](https://canvas.mit.edu/courses/40577/discussion_topics/448963#entry-230481) |
-| 8 | Oct 6, 15:00 | 230497 | [entry 230569](https://canvas.mit.edu/courses/40577/discussion_topics/448963#entry-230569) |
-| 9 | Oct 6, 15:23 | 230599 | [entry 230615](https://canvas.mit.edu/courses/40577/discussion_topics/448963#entry-230615) |
-| 10 | Oct 6, 21:00 | 230737 | [entry 230740](https://canvas.mit.edu/courses/40577/discussion_topics/448963#entry-230740) |
+| 1 | Oct 5, 19:30 | 229515 | [entry 230213](https://canvas.mit.edu/courses/40577/discussion_topics/448963?entry_id=230213) |
+| 2 | Oct 5, 21:00 | 229609 | [entry 230233](https://canvas.mit.edu/courses/40577/discussion_topics/448963?entry_id=230233) |
+| 3 | Oct 6, 00:00 | 229788 | [entry 230300](https://canvas.mit.edu/courses/40577/discussion_topics/448963?entry_id=230300), the lost-ack test post (§5) |
+| 4 | Oct 6, 04:30 | 230069 | [entry 230361](https://canvas.mit.edu/courses/40577/discussion_topics/448963?entry_id=230361) |
+| 5 | Oct 6, 06:30 | 230313 | [entry 230384](https://canvas.mit.edu/courses/40577/discussion_topics/448963?entry_id=230384) |
+| 6 | Oct 6, 09:00 | 230383 | [entry 230406](https://canvas.mit.edu/courses/40577/discussion_topics/448963?entry_id=230406) |
+| 7 | Oct 6, 12:00 | 230408 | [entry 230481](https://canvas.mit.edu/courses/40577/discussion_topics/448963?entry_id=230481) |
+| 8 | Oct 6, 15:00 | 230497 | [entry 230569](https://canvas.mit.edu/courses/40577/discussion_topics/448963?entry_id=230569) |
+| 9 | Oct 6, 15:23 | 230599 | [entry 230615](https://canvas.mit.edu/courses/40577/discussion_topics/448963?entry_id=230615) |
+| 10 | Oct 6, 21:00 | 230737 | [entry 230740](https://canvas.mit.edu/courses/40577/discussion_topics/448963?entry_id=230740) |
 
 After the decision rule was narrowed (Oct 6, before 18:00 ET), the agent posted once (#10) and
 deliberately skipped five times (§4).
@@ -237,7 +237,7 @@ before the 00:00 ET cycle and removed after it. From `forum.jsonl`
    anything else. It found its own entry under 229788 with the same content hash and recorded it
    as entry 230300 (`reconciled: true`). It made no POST.
 4. **No duplicate.** There was one POST and one entry:
-   [entry 230300](https://canvas.mit.edu/courses/40577/discussion_topics/448963#entry-230300).
+   [entry 230300](https://canvas.mit.edu/courses/40577/discussion_topics/448963?entry_id=230300).
    `forum report` lists it once, and later status shows `pending: 0`, `abandoned: 0`. The
    one-reply-per-parent guard would also have refused a second reply to 229788 had the model
    tried one.
