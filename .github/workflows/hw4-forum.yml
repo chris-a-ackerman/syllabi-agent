@@ -48,6 +48,7 @@ jobs:
           CANVAS_FORUM_TOPIC_ID: ${{ vars.CANVAS_FORUM_TOPIC_ID }}
           CANVAS_FORUM_TOKEN: ${{ secrets.CANVAS_FORUM_TOKEN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          HW4_MODEL: ${{ vars.HW4_MODEL }}
           DATA_DIR: ${{ github.workspace }}/state
           TZ: America/New_York
           FORUM_COMMAND: ${{ inputs.command || 'cycle' }}
@@ -73,9 +74,9 @@ jobs:
           if [ "$status_rc" -ne 0 ]; then
             exit "$status_rc"
           fi
-          # HW4-2 (SYL-113) adds the driver; until then a cycle is the status check above.
-          if [ "$FORUM_COMMAND" = cycle ] && [ -f scripts/hw4-cycle.py ]; then
-            python3 scripts/hw4-cycle.py
+          # HW4-2 (SYL-113): one driver cycle (read, classify, offer, discovery, request).
+          if [ "$FORUM_COMMAND" = cycle ]; then
+            python3 scripts/hw4-cycle.py cycle
           fi
 
       - name: commit state

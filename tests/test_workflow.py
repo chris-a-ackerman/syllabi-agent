@@ -77,7 +77,8 @@ class StateDirTests(unittest.TestCase):
             self.skipTest("git not available")
         cases = {
             "state/memory/forum-state.json": False, "state/memory/forum-halt": False,
-            "state/memory/hw4-state.json": False, "state/logs/forum.jsonl": False,
+            "state/memory/hw4-state.json": False, "state/logs/forum.jsonl": False, "state/logs/hw4.jsonl": False,
+            "state/memory/hw4-state.json.lock": True,
             "state/memory/forum-state.json.lock": True, "state/memory/.forum-state.json.x.tmp": True,
             "state/work/forum/post-1.txt": True, "memory/forum-state.json": True, "logs/forum.jsonl": True,
             "data/memory/forum-state.json": True,
