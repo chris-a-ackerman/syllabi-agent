@@ -139,7 +139,7 @@ class FirstCycleTests(Hw4TestCase):
         body = self.cycle()
         posts = self.posted()
         self.assertEqual([p[0] for p in posts], [None, 102])
-        self.assertIn("SERVICE OFFER", posts[0][1])
+        self.assertIn("Service: syllabus to calendar", posts[0][1])
         self.assertIn("REQUEST", posts[1][1])
         self.assertEqual(body["posts"], 2)
         st = self.state()
@@ -241,6 +241,23 @@ class StatusTests(Hw4TestCase):
         hw4.main(["status"], env=self.env, out=out)
         body = json.loads(out.getvalue())
         self.assertEqual((body["offers_seen"], body["request"]["status"]), (2, "sent"))
+
+    def test_retired_offer_means_the_next_cycle_posts_the_new_one(self):
+        # What SYL-113's offer change did by hand: the old offer moved to past_offers, offer reset.
+        os.makedirs(os.path.join(self.data, "memory"))
+        old = dict(hw4.EMPTY_STATE, past_offers=[{"entry_id": 99, "retired": "service changed"}])
+        del old["inbox"]                                   # an older file without newer keys still loads
+        with open(self.state_path(), "w") as fh:
+            json.dump(old, fh)
+        self.model()
+        self.cycle()
+        [(parent, text)] = self.posted()
+        self.assertIsNone(parent)
+        self.assertIn("syllabus to calendar", text)
+        st = self.state()
+        self.assertEqual(st["past_offers"][0]["entry_id"], 99)
+        self.assertIsNotNone(st["offer"]["entry_id"])
+        self.assertEqual(st["inbox"], [])
 
     def test_corrupt_state_is_an_error_and_never_replaced(self):
         os.makedirs(os.path.join(self.data, "memory"))
@@ -436,6 +453,14 @@ class TextTests(unittest.TestCase):
         self.assertLess(len(text.strip()), forum.TEXT_MAX)
         for line in text.splitlines():
             self.assertNotRegex(line, r"^\s*(#|[-*] |\d+\. )")
+
+    def test_offer_is_the_syllabus_to_calendar_service(self):
+        text = hw4.render("offer.md")
+        for phrase in ("syllabus to calendar", "500 to 12,000 characters", "BEGIN:VCALENDAR",
+                       "hours per week", "quote verbatim", "within 6 hours", "fewer than three dates"):
+            self.assertIn(phrase, text)
+        self.assertLessEqual(len([p for p in text.split("\n\n") if p.strip()]), 2)
+        self.assertNotIn("brief", text.lower())
 
     def test_no_hard_coded_provider_or_entry_id(self):
         files = [os.path.join(REPO, "scripts", "hw4-cycle.py")]
