@@ -19,9 +19,11 @@ for `post` (docs/tool-contract.md §9):
     5. target check    --reply-to is a live entry in this topic, not our own -> FORUM_BAD_TARGET
     6. duplicates      same parent + same text hash -> ok, duplicate: true; a second reply to the
                        same parent -> FORUM_ALREADY_REPLIED
-    7. rate limit      3 posts per trailing 60 minutes (memory and the forum view) -> FORUM_RATE
+    7. rate limit      3 write attempts (retries included) per trailing 60 minutes, counted from
+                       memory and the forum view                             -> FORUM_RATE
     8. intent          a pending record is written to the state file before the POST
-    9. POST            3 attempts, backoff, 45 s budget, re-read and reconcile before every retry
+    9. POST            2 attempts, backoff, 45 s budget, re-read and reconcile before the retry;
+                       every attempt is recorded in attempt_times before it is sent
    10. verify          GET entry_list; own user id and same hash, then the intent becomes a post
 
 Prints exactly one JSON object on stdout (docs/tool-contract.md, "Common envelope"):
@@ -38,6 +40,7 @@ Environment:
                             can point the tool at another topic or course.
     DATA_DIR                default /data. State: memory/forum-state.json, halt switch:
                             memory/forum-halt, log: logs/forum.jsonl, post texts: work/forum/
+                            (on GitHub Actions: $GITHUB_WORKSPACE/state, committed after each run)
     FORUM_FAULT=lost_ack    test hook (only with FORUM_FAULT_OK=1): do the real POST, then drop
                             the response as if it timed out
 
@@ -87,13 +90,13 @@ MAX_PAGES = 100              # hard stop for Link: rel="next" loops
 MAX_BODY = 20 * 1024 * 1024  # a discussion view is JSON text; anything bigger is not Canvas
 MAX_DEPTH = 50               # nesting guard while flattening /view
 RATE_RETRY_MAX_SLEEP = 5     # GET: one retry after Retry-After (capped), as in canvas.py
-POST_ATTEMPTS = 3
+POST_ATTEMPTS = 2            # one retry per command; the next cycle reconciles anything ambiguous
 POST_BACKOFF = (2, 4, 8)     # seconds before retry n (only the first POST_ATTEMPTS - 1 are used)
 POST_RETRY_AFTER_MAX = 20    # cap on a 429 Retry-After inside the post loop
-POST_BUDGET = 45             # seconds for the whole POST stage; Maritime caps a command at 60 s
+POST_BUDGET = 45             # seconds for the whole POST stage, so one command stays well under a minute
 MIN_ATTEMPT_SECONDS = 5      # don't start another POST with less than this left in the budget
 RATE_WINDOW = dt.timedelta(minutes=60)
-RATE_MAX = 3
+RATE_MAX = 3                 # write attempts (not just successful posts) per RATE_WINDOW
 PENDING_TTL = dt.timedelta(minutes=2)
 POST_TIME_KEEP = dt.timedelta(days=1)
 TEXT_MAX = 2000
@@ -665,7 +668,7 @@ def control_state(topic):
 
 EMPTY_STATE = {
     "version": 1, "self_user_id": None, "seen": {}, "posts": [], "pending": [], "abandoned": [],
-    "post_times": [], "consecutive_failures": 0, "last_cycle_at": None,
+    "post_times": [], "attempt_times": [], "consecutive_failures": 0, "last_cycle_at": None,
 }
 
 
@@ -730,6 +733,8 @@ class Store:
                              % (path, _short(str(e), 80)), detail={"path": path})
         except OSError as e:
             raise ForumError("FORUM_STATE", "cannot read %s: %s" % (path, _short(str(e), 80)), detail={"path": path})
+        if isinstance(state, dict) and "attempt_times" not in state:
+            state["attempt_times"] = []      # a HW3 state file, from before attempts were counted
         problem = _state_problem(state)
         if problem:
             raise ForumError("FORUM_STATE", "%s is not a version-1 forum state (%s); a human must repair or "
@@ -745,7 +750,8 @@ class Store:
 def _state_problem(state):
     if not isinstance(state, dict) or state.get("version") != 1:
         return "version"
-    types = {"seen": dict, "posts": list, "pending": list, "abandoned": list, "post_times": list}
+    types = {"seen": dict, "posts": list, "pending": list, "abandoned": list, "post_times": list,
+             "attempt_times": list}
     for key, kind in types.items():
         if not isinstance(state.get(key), kind):
             return key
@@ -874,20 +880,40 @@ def reconcile(ctx, entries, self_id):
     return found
 
 
-def _posts_in_window(ctx, entries, self_id):
+def _in_window(ctx, times):
     start = ctx.cfg.now - RATE_WINDOW
-    in_memory = sum(1 for t in ctx.state["post_times"] if (parse_canvas_time(t) or start) > start)
-    in_forum = 0
-    if entries is not None:
-        in_forum = sum(1 for e in entries if e["user_id"] == self_id
-                       and (parse_canvas_time(e.get("created_at")) or start) > start)
-    return max(in_memory, in_forum)
+    return sum(1 for t in times if (parse_canvas_time(t) or start) > start)
 
 
-def _prune_post_times(ctx):
+def _own_in_window(ctx, entries, self_id):
+    if entries is None:
+        return 0
+    start = ctx.cfg.now - RATE_WINDOW
+    return sum(1 for e in entries if e["user_id"] == self_id
+               and (parse_canvas_time(e.get("created_at")) or start) > start)
+
+
+def _posts_in_window(ctx, entries, self_id):
+    return max(_in_window(ctx, ctx.state["post_times"]), _own_in_window(ctx, entries, self_id))
+
+
+def _attempts_in_window(ctx, entries, self_id):
+    """What the course counts: every write attempt, retries and failures included. Memory can only
+    under-count when the state file is lost, so the forum's own entries (and posts) are a floor."""
+    return max(_in_window(ctx, ctx.state["attempt_times"]), _posts_in_window(ctx, entries, self_id))
+
+
+def _prune_times(ctx):
     keep_after = ctx.cfg.now - POST_TIME_KEEP
-    ctx.state["post_times"] = [t for t in ctx.state["post_times"]
-                               if (parse_canvas_time(t) or keep_after) > keep_after]
+    for key in ("post_times", "attempt_times"):
+        ctx.state[key] = [t for t in ctx.state[key] if (parse_canvas_time(t) or keep_after) > keep_after]
+
+
+def _record_attempt(ctx):
+    """Saved before the request goes out: a crash mid-POST still counts the attempt."""
+    _prune_times(ctx)
+    ctx.state["attempt_times"].append(fmt(ctx.cfg.now))
+    ctx.save()
 
 
 # --------------------------------------------------------------------------- read
@@ -1010,6 +1036,7 @@ def _post_with_retries(ctx, intent, message, self_id):
     last = None
     for attempt in range(1, POST_ATTEMPTS + 1):
         ctx.rec["attempts"] = attempt
+        _record_attempt(ctx)
         timeout = max(1.0, min(API_TIMEOUT, POST_BUDGET - (clock() - started)))
         wait, ambiguous = 0.0, False
         try:
@@ -1047,6 +1074,9 @@ def _post_with_retries(ctx, intent, message, self_id):
                 raise ForumError("CANVAS_NET", "unexpected HTTP %d for the POST" % resp.status, status=resp.status)
         maybe_saved = maybe_saved or ambiguous
         if attempt == POST_ATTEMPTS:
+            break
+        if _attempts_in_window(ctx, None, self_id) >= RATE_MAX:
+            cfg.log("no retry: %d write attempts in the last 60 minutes" % RATE_MAX)
             break
         pause = max(float(POST_BACKOFF[attempt - 1]), wait)
         if (clock() - started) + pause + MIN_ATTEMPT_SECONDS > POST_BUDGET:
@@ -1126,11 +1156,13 @@ def cmd_post(ctx, args):
                                or any(e["parent_id"] == parent for e in own)):
         raise ForumError("FORUM_ALREADY_REPLIED", "this agent already replied to entry %s" % parent,
                          detail={"reply_to": parent})
-    # 7. rate limit (memory or the forum, whichever is higher)
-    recent = _posts_in_window(ctx, entries, self_id)
-    if recent >= RATE_MAX:
-        raise ForumError("FORUM_RATE", "%d posts in the last 60 minutes; the limit is %d" % (recent, RATE_MAX),
-                         detail={"posts_last_hour": recent, "limit": RATE_MAX})
+    # 7. rate limit: write attempts, from memory or the forum, whichever is higher
+    attempts = _attempts_in_window(ctx, entries, self_id)
+    if attempts >= RATE_MAX:
+        raise ForumError("FORUM_RATE", "%d write attempts in the last 60 minutes; the limit is %d"
+                         % (attempts, RATE_MAX), detail={"attempts_last_hour": attempts,
+                                                         "posts_last_hour": _posts_in_window(ctx, entries, self_id),
+                                                         "limit": RATE_MAX})
     # 8. intent, saved before the POST
     intent = {"intent_id": uuid.uuid4().hex, "parent_id": parent, "hash": digest, "text": text,
               "created_at": fmt(cfg.now)}
@@ -1148,7 +1180,7 @@ def cmd_post(ctx, args):
         _verify(ctx, entry_id, intent, self_id)
         st["pending"].remove(intent)
         post = _record_post(ctx, intent, entry_id, fmt(cfg.now), reconciled=False)
-    _prune_post_times(ctx)
+    _prune_times(ctx)
     st["last_cycle_at"] = fmt(cfg.now)
     ctx.save()
     ctx.rec.update({"entry_id": post["entry_id"]})
@@ -1196,7 +1228,8 @@ def cmd_status(ctx, args):
     result.update({
         "self_user_id": st.get("self_user_id"), "seen_total": len(st["seen"]), "own_posts": len(st["posts"]),
         "pending": len(st["pending"]), "abandoned": len(st["abandoned"]),
-        "posts_last_hour": _posts_in_window(ctx, None, None), "rate_limit": RATE_MAX,
+        "posts_last_hour": _posts_in_window(ctx, None, None),
+        "attempts_last_hour": _attempts_in_window(ctx, None, None), "rate_limit": RATE_MAX,
         "consecutive_failures": st["consecutive_failures"], "max_failures": MAX_FAILURES,
         "last_cycle_at": st.get("last_cycle_at"),
     })

@@ -620,6 +620,42 @@ class PostGuardTests(ForumTestCase):
         self.fake.post_time = "2026-10-05T14:11:00Z"
         self.assertEqual(self.post("Thread four", now="2026-10-05T14:11:00Z")[0], 0)
 
+    def test_rate_limit_counts_attempts_not_just_posts(self):
+        self.assertEqual(self.post("Only success", now="2026-10-05T13:20:00Z")[0], 0)
+        self.fake.post_plan = ["500", "500"]                # two failed attempts, nothing saved
+        self.assertEqual(self.post("Failed twice", now="2026-10-05T13:30:00Z")[0], 2)
+        self.assertEqual(len(self.fake.own()), 1)
+        e = self.err("FORUM_RATE", "post", "--text-file", self.text_file("Fourth attempt"),
+                     now="2026-10-05T13:40:00Z")      # the pending intent is abandoned first
+        self.assertEqual((e["detail"]["attempts_last_hour"], e["detail"]["posts_last_hour"]), (3, 1))
+        self.assertEqual(len(self.fake.posts()), 3)
+        # an hour after the first attempt, one slot frees up
+        self.assertEqual(self.post("Later", now="2026-10-05T14:21:00Z")[0], 0)
+
+    def test_attempt_times_survive_a_restart(self):
+        self.fake.post_plan = ["403"]
+        self.err("CANVAS_403", "post", "--text-file", self.text_file("Refused."))
+        self.assertEqual(self.state()["attempt_times"], [NOW])
+        self.assertEqual(self.ok("status")["attempts_last_hour"], 1)   # a new process reads it back
+        self.fake.post_plan = ["403", "403"]
+        self.err("CANVAS_403", "post", "--text-file", self.text_file("Refused again."))
+        self.clear_halt()
+        self.err("CANVAS_403", "post", "--text-file", self.text_file("And again."))
+        self.clear_halt()
+        self.err("FORUM_RATE", "post", "--text-file", self.text_file("No more."))
+        self.assertEqual(len(self.fake.posts()), 3)
+
+    def test_hw3_state_without_attempt_times_still_loads(self):
+        self.ok("post", "--text-file", self.text_file("one"))
+        path = os.path.join(self.data, "memory", "forum-state.json")
+        st = self.state()
+        del st["attempt_times"]
+        with open(path, "w") as fh:
+            json.dump(st, fh)
+        self.assertEqual(self.ok("status")["attempts_last_hour"], 1)   # post_times is the floor
+        self.ok("post", "--text-file", self.text_file("two"))
+        self.assertEqual(self.state()["attempt_times"], [NOW])
+
     def test_rate_limit_counts_memory_when_the_forum_hides_posts(self):
         for i in range(3):
             self.assertEqual(self.post("Thread %d" % i)[0], 0)
@@ -744,27 +780,36 @@ class PostReliabilityTests(ForumTestCase):
         self.assertEqual(len(self.fake.own()), 1)
 
     def test_clean_500_is_retried_with_backoff(self):
-        self.fake.post_plan = ["500", "503"]
-        body = self.ok("post", "--text-file", self.text_file("Third time lucky."))
+        self.fake.post_plan = ["503"]
+        body = self.ok("post", "--text-file", self.text_file("Second time lucky."))
         self.assertTrue(body["verified"])
         self.assertNotIn("reconciled", body)
-        self.assertEqual(body["attempts"], 3)
-        self.assertEqual(self.slept, [2.0, 4.0])
-        self.assertEqual(len(self.fake.posts()), 3)
+        self.assertEqual(body["attempts"], 2)
+        self.assertEqual(self.slept, [2.0])
+        self.assertEqual(len(self.fake.posts()), 2)
         self.assertEqual(len(self.fake.own()), 1)
-        # the forum was re-read before each retry
+        # the forum was re-read before the retry
         views = [i for i, c in enumerate(self.fake.calls) if urllib.parse.urlparse(c[1]).path == TOPIC_PATH + "/view"]
         posts = [i for i, c in enumerate(self.fake.calls) if c[0] == "POST"]
         self.assertTrue(any(posts[0] < v < posts[1] for v in views))
-        self.assertTrue(any(posts[1] < v < posts[2] for v in views))
+        self.assertEqual(self.state()["attempt_times"], [NOW, NOW])
 
-    def test_three_500s_give_up_and_leave_the_intent_pending(self):
+    def test_500_is_retried_once_not_twice(self):
         self.fake.post_plan = ["500", "500", "500"]
         e = self.err("CANVAS_NET", "post", "--text-file", self.text_file("Never saved."))
         self.assertFalse(e["retryable"])
-        self.assertEqual(self.slept, [2.0, 4.0])
-        self.assertEqual(len(self.fake.posts()), 3)
+        self.assertEqual(self.slept, [2.0])
+        self.assertEqual(len(self.fake.posts()), 2)
         self.assertEqual(len(self.state()["pending"]), 1)
+        self.assertEqual(self.log_lines()[-1]["attempts"], 2)
+
+    def test_no_retry_when_it_would_be_a_fourth_attempt_in_the_hour(self):
+        self.assertEqual(self.post("One", now="2026-10-05T13:20:00Z")[0], 0)
+        self.assertEqual(self.post("Two", now="2026-10-05T13:40:00Z")[0], 0)
+        self.fake.post_plan = ["500"]
+        self.err("CANVAS_NET", "post", "--text-file", self.text_file("Three"))
+        self.assertEqual(len(self.fake.posts()), 3)       # the retry would have been attempt 4
+        self.assertEqual(self.slept, [])
 
     def test_429_is_retried_after_retry_after_and_not_reconciled_first(self):
         self.fake.post_plan = ["429"]
@@ -786,13 +831,13 @@ class PostReliabilityTests(ForumTestCase):
         real = self.fake._post
 
         def slow_post(parent, message):
-            self.t[0] += 20            # each attempt burns a 20 s timeout
+            self.t[0] += 40            # the attempt burns a 40 s timeout
             return real(parent, message)
 
         self.fake._post = slow_post
         self.err("CANVAS_NET", "post", "--text-file", self.text_file("Slow."))
-        self.assertEqual(len(self.fake.posts()), 2)       # 20 + 2 + 20 = 42 s: no room for a third
-        self.assertEqual(self.slept, [2.0])
+        self.assertEqual(len(self.fake.posts()), 1)       # 40 + 2 + 5 > 45 s: no room for the retry
+        self.assertEqual(self.slept, [])
 
     def test_malformed_json_response_is_canvas_net_and_only_the_intent_changes(self):
         self.fake.add(1, 7, "hello")
@@ -852,9 +897,10 @@ class MemoryTests(ForumTestCase):
         self.ok("post", "--text-file", self.text_file("Hi"), "--reply-to", "1")
         st = self.state()
         self.assertEqual(set(st), {"version", "self_user_id", "seen", "posts", "pending", "abandoned",
-                                   "post_times", "consecutive_failures", "last_cycle_at"})
+                                   "post_times", "attempt_times", "consecutive_failures", "last_cycle_at"})
         self.assertEqual(st["seen"], {"1": NOW})
         self.assertEqual(st["post_times"], [NOW])
+        self.assertEqual(st["attempt_times"], [NOW])
         self.assertEqual(st["posts"][0]["parent_id"], 1)
 
     def test_three_failures_halt_and_deleting_the_file_restores_service(self):
@@ -929,6 +975,7 @@ class MemoryTests(ForumTestCase):
         lines = len(self.log_lines())
         body = self.ok("status")
         self.assertEqual((body["own_posts"], body["posts_last_hour"], body["consecutive_failures"]), (1, 1, 0))
+        self.assertEqual((body["attempts_last_hour"], body["rate_limit"]), (1, 3))
         self.assertEqual(self.read_file("memory", "forum-state.json"), before)
         self.assertEqual(len(self.log_lines()), lines)
 

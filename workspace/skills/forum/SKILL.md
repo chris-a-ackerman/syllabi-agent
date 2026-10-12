@@ -48,7 +48,7 @@ and `--now <ISO>` pins the clock (evals and tests only).
 | `forum post --text-file <path> [--reply-to <entry_id>]` | `entry_id, html_url, verified: true, parent_id, attempts, reconciled?`. Plain text, 1–2,000 characters, in a file under `/data/work/forum/`. Without `--reply-to` it starts a new thread. |
 | (duplicate) | `duplicate: true, code: "FORUM_DUPLICATE", entry_id, html_url`, exit 0. The same text is already posted to the same parent, so nothing was posted. Treat it as done. |
 | `forum skip --reason "<text>"` | `decision: "skip", reason, ts`. Records a deliberate no-post cycle. |
-| `forum status` | `control, control_checked, halted, halt?, self_user_id, seen_total, own_posts, pending, abandoned, posts_last_hour, rate_limit, consecutive_failures, max_failures, last_cycle_at`. Read-only. |
+| `forum status` | `control, control_checked, halted, halt?, self_user_id, seen_total, own_posts, pending, abandoned, posts_last_hour, attempts_last_hour, rate_limit, consecutive_failures, max_failures, last_cycle_at`. Read-only. |
 | `forum report [--since <ISO>]` | `markdown, cycles, posts`. A table of cycles (time, new entries read, decision, reason, result) and the list of own posts with `html_url`. It contains no names and no token. |
 
 ### One cycle
@@ -74,7 +74,7 @@ and `--now <ISO>` pins the clock (evals and tests only).
 | `FORUM_TEXT` | empty, over 2,000 characters, contains a secret env value or `syl_agent_` | rewrite it without that, next cycle |
 | `FORUM_BAD_TARGET` | `--reply-to` is not a live entry in this topic, or it is your own entry | pick a real entry from `read` |
 | `FORUM_ALREADY_REPLIED` | you already replied to that entry | do not reply again. Not a failure. |
-| `FORUM_RATE` | 3 posts in the trailing 60 minutes (memory or the forum, whichever shows more) | skip. Not a failure. |
+| `FORUM_RATE` | 3 write attempts (retries and failed POSTs included) in the trailing 60 minutes (memory or the forum, whichever shows more) | skip. Not a failure. |
 | `FORUM_PENDING` | an earlier post may still be saving (under 2 minutes old, not visible yet) | skip. The next cycle reconciles it. |
 | `FORUM_VERIFY` | Canvas returned an id, but the saved entry did not check out | skip. The next cycle reconciles it by id. |
 | `FORUM_STATE` | `forum-state.json` is corrupt or unreadable; it is never replaced | stop. Tell Chris; a human repairs it. |
@@ -97,7 +97,7 @@ At 3, the tool writes the halt file. A `CANVAS_401` writes it at once.
   `POST .../entries/{id}/replies` (form field `message`, escaped plain text in `<p>` paragraphs).
   `_request()` refuses any other POST and any other method.
 - Idempotency: each post is written to the state file as a `pending` intent before the POST. A
-  timeout, 5xx or unreadable 2xx is ambiguous, so before every retry the tool re-reads the forum
+  timeout, 5xx or unreadable 2xx is ambiguous, so before its one retry the tool re-reads the forum
   and reconciles: your own entry, same parent and same normalized-text hash, counts as posted.
   Abandoned after 2 minutes if not found.
 - `FORUM_FAULT=lost_ack` with `FORUM_FAULT_OK=1` makes the real POST, then drops the answer.

@@ -461,7 +461,7 @@ Canvas endpoints, base `$CANVAS_BASE_URL/api/v1/courses/{course}/discussion_topi
 | `read` | `--limit N` (default 50) | `note, control: RUNNING\|PAUSED\|UNKNOWN, control_error?, new: [{id, parent_id, thread_id, author: "user <id>", created_at, text (≤ 4,000), truncated?, context? (≤ 1,000, replies only)}], threads, seen_total, own_posts, pending, remaining?`. `new` = not in memory, not the agent's own user id, not deleted, oldest first. Returned ids are stored as seen. |
 | `post` | `--text-file` (under `$DATA_DIR/work/forum/`), `--reply-to <entry_id>?` | `entry_id, html_url, verified: true, parent_id, attempts, reconciled?`. A duplicate is `duplicate: true, code: FORUM_DUPLICATE, entry_id, html_url` with exit 0, and nothing is posted |
 | `skip` | `--reason` | `decision: "skip", reason, ts` |
-| `status` | | `control, control_checked, halted, halt?, self_user_id, seen_total, own_posts, pending, abandoned, posts_last_hour, rate_limit, consecutive_failures, max_failures, last_cycle_at` (read-only; no Canvas call while halted) |
+| `status` | | `control, control_checked, halted, halt?, self_user_id, seen_total, own_posts, pending, abandoned, posts_last_hour, attempts_last_hour, rate_limit, consecutive_failures, max_failures, last_cycle_at` (read-only; no Canvas call while halted) |
 | `report` | `--since ISO?` | `markdown` (cycles table: time, new entries read, decision, reason, result; own posts with `html_url`; authors only as `user <id>`), `cycles, posts` |
 
 Global flags: `--now ISO` pins the clock (tests and evals), and `-v` logs `<method> <path>` to stderr.
@@ -483,13 +483,17 @@ Global flags: `--now ISO` pins the clock (tests and evals), and `-v` logs `<meth
 6. **Duplicates**: same parent + same normalized-text hash in `posts`, or among the agent's own
    entries in the view → `FORUM_DUPLICATE` (exit 0). A second reply to the same parent (memory or
    view) → `FORUM_ALREADY_REPLIED`.
-7. **Rate**: 3 posts in the trailing 60 minutes, counted as the larger of `post_times` in memory
-   and the agent's own entries in the view by `created_at` (so a lost state file can't raise it)
-   → `FORUM_RATE`.
+7. **Rate**: 3 write **attempts** in the trailing 60 minutes (the HW4 forum counts every attempt,
+   retries and failed POSTs included), counted as the largest of `attempt_times` and `post_times`
+   in memory and the agent's own entries in the view by `created_at` (so a lost state file can't
+   raise it) → `FORUM_RATE` (`detail`: `attempts_last_hour, posts_last_hour, limit`).
+   `attempt_times` is appended and saved before each POST is sent, and kept 24 h like
+   `post_times`; a state file from before HW4 without it loads as `[]`.
 8. **Intent**: `pending += {intent_id, parent_id, hash, text, created_at}`, saved **before** the POST.
-9. **POST**: up to 3 attempts inside a 45 s budget (Maritime caps a command at 60 s). The pause
-   before retry *n* is `2^n` s (2, then 4), or a 429's `Retry-After` when that is longer (cap 20 s).
-   A timeout, a 5xx or an unreadable 2xx is ambiguous: the post may have been saved. Before every
+9. **POST**: up to 2 attempts (one retry; the next cycle reconciles anything ambiguous) inside a
+   45 s budget. The pause before the retry is 2 s, or a 429's `Retry-After` when that is longer
+   (cap 20 s). There is no retry when it would be the 4th attempt in the trailing hour.
+   A timeout, a 5xx or an unreadable 2xx is ambiguous: the post may have been saved. Before the
    retry the forum is re-read and reconciled, and a retry is never blind. An unreadable 2xx is not
    retried at all. A 4xx other than 429 is not retried, and its intent is abandoned. A final
    ambiguous failure leaves the intent pending for the next command.
@@ -539,7 +543,7 @@ without a second POST. Without `FORUM_FAULT_OK=1` the hook is ignored (logged as
 | `FORUM_BAD_TARGET` | `--reply-to` not a live entry in the topic, or own entry | no | pick an id from `read` |
 | `FORUM_DUPLICATE` | (exit 0, `duplicate: true`) same parent + same text already posted | — | treat as done |
 | `FORUM_ALREADY_REPLIED` | a reply to that parent already exists | no | don't reply again |
-| `FORUM_RATE` | 3 posts in the last 60 minutes | no | skip |
+| `FORUM_RATE` | 3 write attempts in the last 60 minutes | no | skip |
 | `FORUM_PENDING` | an earlier intent is unresolved and < 2 minutes old | no | skip; next cycle reconciles |
 | `FORUM_VERIFY` | the returned entry is missing, not ours, or a different text | no | skip; next cycle reconciles by id |
 | `FORUM_STATE` | state file corrupt/unreadable (never replaced) | no | a human repairs it |

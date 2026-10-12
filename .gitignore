@@ -30,6 +30,20 @@ readings/
 podcasts/
 *.mp3
 *.m4a
+# forum.py's lock file (memory/forum-state.json.lock) and atomic-write temp files
+*.lock
+*.tmp
+
+# HW4: the GitHub Actions runner commits its memory under state/ (ids, hashes and decisions only;
+# see state/README.md). These exceptions must stay below the runtime rules above. Post texts the
+# driver writes to state/work/forum/ are scratch and stay out.
+!/state/
+!/state/**
+/state/**/*.lock
+/state/**/*.tmp
+/state/work/**
+!/state/work/forum/
+!/state/work/forum/.gitkeep
 
 # Tooling
 # scripts/make-submission-zip.sh output
