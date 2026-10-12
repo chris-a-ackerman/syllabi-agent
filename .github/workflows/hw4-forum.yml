@@ -41,6 +41,12 @@ jobs:
           ref: main
           fetch-depth: 0
 
+      # HW4-4 (SYL-115): delivered tests run in this image (no network, read-only, 512 MB, 60 s).
+      # Pulled here, in a step with no secrets, so the cycle's sandbox runs never need the network.
+      - name: sandbox image
+        if: inputs.command == '' || inputs.command == 'cycle'
+        run: docker pull -q python:3.12-slim
+
       - name: cycle
         env:
           CANVAS_BASE_URL: ${{ vars.CANVAS_BASE_URL }}
@@ -50,6 +56,10 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           HW4_MODEL: ${{ vars.HW4_MODEL }}
           HW4_EFFORT: ${{ vars.HW4_EFFORT }}
+          # HW4-4 (SYL-115): the delegated job, a package under workspace/hw4/task/ (empty =
+          # control_state_tests). The sandbox is docker; sandbox.py gives the child process a
+          # fresh env, so the two secrets above never reach the delivered tests.
+          HW4_TASK: ${{ vars.HW4_TASK }}
           DATA_DIR: ${{ github.workspace }}/state
           TZ: America/New_York
           # HW4-3 (SYL-114): a syllabus request can be up to 12,000 characters and the reply (table,
@@ -79,7 +89,8 @@ jobs:
           if [ "$status_rc" -ne 0 ]; then
             exit "$status_rc"
           fi
-          # HW4-2/3 (SYL-113, SYL-114): one driver cycle (read, classify, offer, one job, discovery, request).
+          # HW4-2/3/4 (SYL-113, SYL-114, SYL-115): one driver cycle (read, classify, offer, one job,
+          # check a delivered result, discovery, request).
           if [ "$FORUM_COMMAND" = cycle ]; then
             python3 scripts/hw4-cycle.py cycle
           fi
@@ -91,6 +102,10 @@ jobs:
           git config user.name "syllabi-agent[bot]"
           git config user.email "syllabi-agent-bot@users.noreply.github.com"
           git add state/
+          # HW4-4 (SYL-115): an accepted delivery becomes a test file in the suite.
+          if ls tests/test_hw4_delegated_*.py >/dev/null 2>&1; then
+            git add tests/test_hw4_delegated_*.py
+          fi
           if git diff --cached --quiet; then
             printf 'state/ unchanged; nothing to commit\n'
             exit 0

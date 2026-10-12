@@ -42,7 +42,7 @@ were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritim
 │   ├── make-submission-zip.sh    ← HW3 ZIP from git HEAD; refuses secrets and runtime files (SYL-109)
 │   ├── redact-evidence.py        ← stdin → stdout: secrets, emails, other users' ids out of evidence (SYL-109)
 │   ├── hw4-log-status.py         ← one `forum status` line per Actions run into forum.jsonl (SYL-112)
-│   └── hw4-cycle.py              ← HW4 driver: read, classify, offer, one job, choose a provider, request (SYL-113/114)
+│   └── hw4-cycle.py              ← HW4 driver: read, classify, offer, one job, check a result, choose, request (SYL-113/114/115)
 ├── workspace/                    ← our half of the OpenClaw workspace (installed by install-workspace.sh)
 │   ├── AGENTS.md                 ← operating instructions: phases, stop rules, ask-a-human, hard rules
 │   ├── SOUL.md                   ← persona / tone / boundaries
@@ -72,7 +72,8 @@ were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritim
 │   │       ├── SKILL.md
 │   │       └── scripts/forum.py    (+ `forum` symlink)
 │   ├── hw4/                      ← HW4 driver parts (SYL-113): model.py (Messages API client),
-│   │                               templates/ (offer + request texts), task/ (the function to test + 2 mutants),
+│   │                               templates/ (offer + verdict texts), task/<name>/ (the delegated job as a package: request, need, files, verify.py),
+│   │                               checks.py + sandbox.py (HW4-4: extract, static checks, isolated unittest run),
 │   │                               services/syllabus_calendar.py (the offered service, SYL-114)
 │   └── memory-templates/
 │       ├── prep-log.schema.json  ← JSON Schema for /data/memory/prep-log.json
@@ -224,8 +225,9 @@ now records `attempt_times` and retries a failed POST once, not twice.
    `cycle` reads the forum, classifies new entries with one model call (peer text capped at 1,500
    chars and wrapped in nonce-delimited blocks; the prompt holds no env values), posts the service
    offer once, then has a second model call rank the other offers against the need ("Python unit
-   tests, stdlib, a file I can run") and replies to the chosen one with the request
-   ([`workspace/hw4/templates/`](workspace/hw4/templates)) and a 24 h deadline. At most 2
+   tests, stdlib, a file I can run", from the task package's `need.txt`) and replies to the chosen
+   one with the request ([`workspace/hw4/task/`](workspace/hw4/task/README.md), selected by
+   `HW4_TASK`) and a 24 h deadline. At most 2
    `forum post` calls per cycle; a request past its deadline becomes `timed_out` and that provider
    is not asked again; after 3 cycles with no fitting offer the bar drops to any offer about code,
    Python, tests or review. Every choice is appended to `discovery` in `hw4-state.json`.
@@ -251,6 +253,18 @@ now records `attempt_times` and retries a failed POST once, not twice.
    recorded on the job and never answered. Run it on its own:
    `python3 workspace/hw4/services/syllabus_calendar.py extract syllabus.txt > out.json`, then
    `… render out.json` (the reply) or `… render out.json --ics > calendar.ics`.
+9. **Checking and using the result** (HW4-4, SYL-115): a reply to the request (or the provider's
+   own result, decline or question in that thread) is fetched with `forum entry --keep-indent`, the
+   code is extracted and saved to `state/work/hw4/result-<entry_id>.py`, and the task package's
+   `verify.py` checks it: static checks (stdlib allow-list, no file, network or subprocess use, a
+   `TestCase` with 3+ tests), then three runs in a docker sandbox (no network, read-only, 512 MB,
+   60 s, an env with no secrets): the tests must pass on the real function and fail on each of two
+   mutants. All pass → an "accepted" reply with the outcomes and a tip line (5 coins, 3 after a
+   correction), and the tests are committed as `tests/test_hw4_delegated_control_state.py`. A
+   failure → one correction request quoting the failing output (+12 h), then a rejection (no tip;
+   the provider is not asked again). The sandbox, the checks and adding a new job:
+   [`docs/tool-contract.md` §10](docs/tool-contract.md) and
+   [`workspace/hw4/task/README.md`](workspace/hw4/task/README.md).
 
 Note: `scripts/make-submission-zip.sh` (HW3) refuses any tree that contains `forum-state.json` or
 `forum.jsonl`, so once a run has committed `state/` it no longer builds from `main`.

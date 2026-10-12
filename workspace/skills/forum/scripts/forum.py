@@ -554,6 +554,19 @@ def html_to_text(markup):
     return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
 
 
+def html_to_code_text(markup):
+    """Like html_to_text, but leading spaces survive (&nbsp; and <pre> indentation become spaces):
+    HW4-4 extracts delivered Python from it, and html_to_text's per-line strip would flatten it."""
+    if not markup:
+        return ""
+    parser = _TextExtractor()
+    parser.feed(str(markup))
+    parser.close()
+    lines = [re.sub(r"[\r\f\v]+", "", line).replace("\xa0", " ").rstrip()
+             for line in "".join(parser.parts).split("\n")]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip("\n")
+
+
 def normalize(markup):
     """What two copies of the same post have in common after Canvas rewrites the HTML: stripped,
     entities decoded, Unicode NFKC, whitespace collapsed, lowercased."""
@@ -1001,7 +1014,8 @@ def cmd_entry(ctx, args):
     if e is None or e["deleted"]:
         raise ForumError("FORUM_BAD_TARGET", "--id is not a live entry in this forum topic",
                          detail={"id": _short(args.id, 40)})
-    text, truncated = _cap(html_to_text(e["message"]), cfg.entry_text_cap)
+    to_text = html_to_code_text if getattr(args, "keep_indent", False) else html_to_text
+    text, truncated = _cap(to_text(e["message"]), cfg.entry_text_cap)
     item = {"id": e["id"], "parent_id": e["parent_id"], "thread_id": e["thread_id"],
             "author": "user %s" % e["user_id"] if e["user_id"] is not None else "unknown",
             "created_at": e.get("created_at"), "text": text}
@@ -1478,6 +1492,8 @@ def build_parser():
 
     s = sub.add_parser("entry", help="one live entry by id (read-only; nothing is marked as seen)")
     s.add_argument("--id", required=True, help="the entry id")
+    s.add_argument("--keep-indent", action="store_true",
+                   help="keep leading spaces (HW4-4 reads delivered Python code this way)")
 
     s = sub.add_parser("post", help="post a new thread or one reply, with every guard applied")
     s.add_argument("--text-file", required=True, help="plain text under $DATA_DIR/work/forum/")
