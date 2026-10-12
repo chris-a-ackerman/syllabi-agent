@@ -1,6 +1,6 @@
 """model: the HW4 driver's only model call (SYL-113, HW4-2).
 
-    complete(system, user, *, max_tokens=16_000, timeout=120) -> str
+    complete(system, user, *, schema=None, max_tokens=16_000, timeout=120) -> str
     parse_json(text) -> the JSON value in a model answer (a ```json fenced block is fine)
 
 One function over the Anthropic Messages API with urllib, so the provider can be swapped by
@@ -12,7 +12,9 @@ Current models think by default (adaptive thinking; the thinking blocks come bac
 thinking counts against max_tokens. The first live run hit max_tokens=1500 with no answer text, so
 the effort is set to `low` (classification and ranking are simple judgements) and max_tokens is
 16,000. A classifier refusal (stop_reason "refusal") is retried server-side on the fallback model
-Anthropic recommends (`fallbacks: "default"`) for the models that support it.
+Anthropic recommends (`fallbacks: "default"`) for the models that support it. With `schema` (a JSON
+Schema object) the answer is constrained to it (structured outputs, `output_config.format`): the
+second live run's ranking answer was not parseable JSON without it.
 
 Callers never put environment values in `system` or `user`: the prompts carry forum entry ids
 and capped, delimited peer text only. Standard library only, Python 3.10+.
@@ -48,7 +50,7 @@ def _post(url, body, headers, timeout):
         return e.code, e.read(4096)
 
 
-def complete(system, user, *, max_tokens=16_000, timeout=120, env=None):
+def complete(system, user, *, schema=None, max_tokens=16_000, timeout=120, env=None):
     env = os.environ if env is None else env
     key = (env.get("ANTHROPIC_API_KEY") or "").strip()
     if not key:
@@ -57,6 +59,8 @@ def complete(system, user, *, max_tokens=16_000, timeout=120, env=None):
     payload = {"model": model_id, "max_tokens": max_tokens, "system": system,
                "messages": [{"role": "user", "content": user}],
                "output_config": {"effort": (env.get("HW4_EFFORT") or DEFAULT_EFFORT).strip()}}
+    if schema is not None:
+        payload["output_config"]["format"] = {"type": "json_schema", "schema": schema}
     headers = {"x-api-key": key, "anthropic-version": API_VERSION, "content-type": "application/json"}
     if model_id in FALLBACK_MODELS:
         payload["fallbacks"] = "default"
@@ -109,4 +113,4 @@ def parse_json(text):
             return json.loads(c)
         except ValueError:
             continue
-    raise ModelError("the model did not answer with JSON")
+    raise ModelError("the model did not answer with JSON (%d characters)" % len(text))

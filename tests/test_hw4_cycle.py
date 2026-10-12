@@ -38,9 +38,11 @@ class FakeModel:
     def __init__(self, *answers):
         self.answers = list(answers)
         self.calls = []
+        self.schemas = []
 
     def __call__(self, system, user, **kw):
         self.calls.append((system, user))
+        self.schemas.append(kw.get("schema"))
         if not self.answers:
             raise AssertionError("unexpected model call:\n" + user[:500])
         a = self.answers.pop(0)
@@ -50,7 +52,7 @@ class FakeModel:
 
 
 def classify(*items):
-    return [{"id": i, "kind": k, "capability": "cap %s" % i, "confidence": 0.9} for i, k in items]
+    return {"entries": [{"id": i, "kind": k, "capability": "cap %s" % i, "confidence": 0.9} for i, k in items]}
 
 
 def rank(chosen, *fits, reason="best fit"):
@@ -141,6 +143,18 @@ class FirstCycleTests(Hw4TestCase):
         self.assertEqual(len(m.calls), 2)
         self.assertEqual(self.hw4_log()[-1]["posts"], 2)
         self.assertNotIn("skip", [x["command"] for x in self.forum_log()])
+
+    def test_both_calls_ask_for_structured_output(self):
+        self.two_offers()
+        m = self.model(classify((101, "offer"), (102, "offer")), rank(102, (102, 3)))
+        self.cycle()
+        self.assertEqual(m.schemas, [hw4.CLASSIFY_SCHEMA, hw4.RANK_SCHEMA])
+
+    def test_a_bare_array_answer_still_works(self):
+        self.two_offers()
+        self.model(classify((101, "offer"), (102, "offer"))["entries"], rank(102, (102, 3)))
+        self.cycle()
+        self.assertEqual(self.state()["request"]["provider_entry_id"], 102)
 
     def test_second_cycle_with_nothing_new_posts_nothing_and_skips(self):
         self.two_offers()
@@ -294,6 +308,7 @@ class BudgetAndSafetyTests(Hw4TestCase):
             self.assertEqual(after[key], before[key], key)
         self.assertEqual(len(self.fake.posts()), 1)
         self.assertEqual(self.hw4_log()[-1]["reason"], "model")
+        self.assertEqual(self.hw4_log()[-1]["error_message"], "model: HTTP 529")
 
     def test_offers_saved_after_a_model_failure_are_ranked_next_cycle(self):
         self.two_offers()
@@ -478,6 +493,38 @@ class ModelClientTests(unittest.TestCase):
         self.assertNotIn("fallbacks", seen["body"])
         self.assertNotIn("anthropic-beta", seen["headers"])
         self.assertEqual(seen["body"]["output_config"], {"effort": "medium"})
+
+    def test_schema_goes_into_output_config_format(self):
+        seen = {}
+
+        def fake_post(url, body, headers, timeout):
+            seen.update(body=json.loads(body))
+            return 200, json.dumps({"content": [{"type": "text", "text": "{}"}], "stop_reason": "end_turn"}).encode()
+
+        hw4.model._post = fake_post
+        hw4.model.complete("s", "u", schema=hw4.RANK_SCHEMA, env={"ANTHROPIC_API_KEY": "k" * 20})
+        self.assertEqual(seen["body"]["output_config"],
+                         {"effort": "low", "format": {"type": "json_schema", "schema": hw4.RANK_SCHEMA}})
+        hw4.model.complete("s", "u", env={"ANTHROPIC_API_KEY": "k" * 20})
+        self.assertNotIn("format", seen["body"]["output_config"])
+
+    def test_schemas_use_only_supported_features(self):
+        # additionalProperties: false on every object; no numeric or length constraints.
+        def walk(node, path):
+            if isinstance(node, dict):
+                if node.get("type") == "object":
+                    self.assertIs(node.get("additionalProperties"), False, path)
+                    self.assertEqual(sorted(node["required"]), sorted(node["properties"]), path)
+                for bad in ("minimum", "maximum", "minLength", "maxLength", "minItems", "maxItems"):
+                    self.assertNotIn(bad, node, path)
+                for k, v in node.items():
+                    walk(v, path + "/" + k)
+            elif isinstance(node, list):
+                for i, v in enumerate(node):
+                    walk(v, "%s/%d" % (path, i))
+        walk(hw4.CLASSIFY_SCHEMA, "classify")
+        walk(hw4.RANK_SCHEMA, "rank")
+        json.dumps(hw4.CLASSIFY_SCHEMA)
 
     def test_thinking_only_answer_cut_at_max_tokens_is_an_error(self):
         # The first live run: Sonnet 5.5 thinks by default and used the whole budget on thinking.
