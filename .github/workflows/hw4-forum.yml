@@ -1,0 +1,110 @@
+# HW4 (SYL-111): the forum agent on GitHub Actions instead of Maritime/OpenClaw.
+# One run = one cycle. Memory lives in state/ and is committed back to main after every run, so
+# the next run (a fresh runner) starts from what the last one knew. See state/README.md and the
+# "HW4: GitHub Actions runner" section of README.md.
+#
+# Secrets: CANVAS_FORUM_TOKEN, ANTHROPIC_API_KEY. Variables: CANVAS_BASE_URL, CANVAS_FORUM_TOPIC_ID.
+# Never `set -x` here and never print the environment: the token is in it.
+name: hw4-forum
+
+on:
+  schedule:
+    - cron: "17 */2 * * *"   # UTC, every 2 hours at :17
+  workflow_dispatch:
+    inputs:
+      command:
+        description: "cycle (default), status or report"
+        type: choice
+        options: [cycle, status, report]
+        default: cycle
+      fault:
+        description: "test hook: lost_ack does the real POST and drops the answer (empty = off)"
+        type: string
+        default: ""
+
+concurrency:
+  group: hw4-forum
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  forum:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: checkout
+        id: checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: cycle
+        env:
+          CANVAS_BASE_URL: ${{ vars.CANVAS_BASE_URL }}
+          CANVAS_FORUM_COURSE_ID: "40577"
+          CANVAS_FORUM_TOPIC_ID: ${{ vars.CANVAS_FORUM_TOPIC_ID }}
+          CANVAS_FORUM_TOKEN: ${{ secrets.CANVAS_FORUM_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DATA_DIR: ${{ github.workspace }}/state
+          TZ: America/New_York
+          FORUM_COMMAND: ${{ inputs.command || 'cycle' }}
+          FORUM_FAULT: ${{ inputs.fault }}
+          FORUM_FAULT_OK: ${{ inputs.fault != '' && '1' || '' }}
+        run: |
+          set -eu
+          forum=workspace/skills/forum/scripts/forum.py
+          case "$FORUM_COMMAND" in
+            cycle|status|report) ;;
+            *) printf 'unknown command: %s\n' "$FORUM_COMMAND" >&2; exit 2 ;;
+          esac
+          if [ "$FORUM_COMMAND" = report ]; then
+            python3 "$forum" report > "$RUNNER_TEMP/report.json"
+            python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["markdown"])' \
+              "$RUNNER_TEMP/report.json" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          status_rc=0
+          python3 "$forum" status > "$RUNNER_TEMP/status.json" || status_rc=$?
+          cat "$RUNNER_TEMP/status.json"
+          python3 scripts/hw4-log-status.py < "$RUNNER_TEMP/status.json"
+          if [ "$status_rc" -ne 0 ]; then
+            exit "$status_rc"
+          fi
+          # HW4-2 (SYL-113) adds the driver; until then a cycle is the status check above.
+          if [ "$FORUM_COMMAND" = cycle ] && [ -f scripts/hw4-cycle.py ]; then
+            python3 scripts/hw4-cycle.py
+          fi
+
+      - name: commit state
+        if: always() && steps.checkout.outcome == 'success'
+        run: |
+          set -eu
+          git config user.name "syllabi-agent[bot]"
+          git config user.email "syllabi-agent-bot@users.noreply.github.com"
+          git add state/
+          if git diff --cached --quiet; then
+            printf 'state/ unchanged; nothing to commit\n'
+            exit 0
+          fi
+          git commit -q -m "hw4: state after run ${{ github.run_id }} [skip ci]"
+          for try in 1 2 3 4; do
+            if git pull --rebase origin main && git push origin HEAD:main; then
+              exit 0
+            fi
+            git rebase --abort 2>/dev/null || true
+            if [ "$try" -lt 4 ]; then sleep $((try * 5)); fi
+          done
+          printf 'could not push the state commit after 3 retries\n' >&2
+          exit 1
+
+      - name: upload logs
+        if: always() && steps.checkout.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: hw4-forum-logs-${{ github.run_id }}
+          path: state/logs/
+          retention-days: 14
+          if-no-files-found: ignore

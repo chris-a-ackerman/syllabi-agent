@@ -30,14 +30,18 @@ were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritim
 .
 ├── README.md                     ← this file: the plan (source of truth) + repo map
 ├── .env.example                  ← every secret/setting, with where it comes from
-├── .gitignore                    ← keeps secrets and /data runtime output out of git
+├── .gitignore                    ← keeps secrets and /data runtime output out of git (state/ is the exception)
+├── .github/workflows/
+│   └── hw4-forum.yml             ← HW4: the forum agent on GitHub Actions, every 2 h (SYL-112)
+├── state/                        ← HW4: the Actions runner's committed memory (see state/README.md)
 ├── config/
 │   └── openclaw.example.json5    ← openclaw.json settings to merge in (subagent still untested)
 ├── scripts/
 │   ├── install-workspace.sh      ← merges workspace/ into Maritime's OpenClaw workspace (re-run after git pull)
 │   ├── install-jobs.sh           ← creates the 6 OpenClaw cron jobs (ET) from triggers/*.md
 │   ├── make-submission-zip.sh    ← HW3 ZIP from git HEAD; refuses secrets and runtime files (SYL-109)
-│   └── redact-evidence.py        ← stdin → stdout: secrets, emails, other users' ids out of evidence (SYL-109)
+│   ├── redact-evidence.py        ← stdin → stdout: secrets, emails, other users' ids out of evidence (SYL-109)
+│   └── hw4-log-status.py         ← one `forum status` line per Actions run into forum.jsonl (SYL-112)
 ├── workspace/                    ← our half of the OpenClaw workspace (installed by install-workspace.sh)
 │   ├── AGENTS.md                 ← operating instructions: phases, stop rules, ask-a-human, hard rules
 │   ├── SOUL.md                   ← persona / tone / boundaries
@@ -90,6 +94,7 @@ were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritim
 │   ├── test_preplog.py           ← unit tests for the preplog skill (no network)
 │   ├── test_canvas.py            ← canvas skill tests, no network
 │   ├── test_forum.py             ← forum skill tests, fake Canvas, no network
+│   ├── test_workflow.py          ← HW4 workflow file, state/ ignore rules, hw4-log-status.py
 │   ├── test_redact.py            ← redact-evidence.py tests
 │   ├── test_submission_zip.py    ← make-submission-zip.sh tests (throwaway git repos)
 │   └── test_instructions.py      ← pins the hard rules in the instruction files and the deploy merge (python3 -m unittest discover -s tests -v)
@@ -178,6 +183,39 @@ agent `class-prep-repo`, `CANVAS_BASE_URL=https://canvas.mit.edu` already set):
 For the submission: `forum.py report | jq -r .markdown | python3 scripts/redact-evidence.py`
 (agent chat, from `/data/syllabi-agent`) gives the redacted cycle table for the writeup, and `sh scripts/make-submission-zip.sh` builds `dist/syllabi-agent-hw3.zip`
 from the committed tree, refusing it if any secret or runtime file got in.
+
+## HW4: GitHub Actions runner
+
+For HW4 the forum job moves off Maritime/OpenClaw onto GitHub Actions
+([`.github/workflows/hw4-forum.yml`](.github/workflows/hw4-forum.yml)). Each run is one cycle on a
+fresh runner, every 2 hours at :17 UTC (and on demand). The HW4 forum is topic `449948`, and the
+course counts every write **attempt** (retries included) toward 3 per rolling hour, so `forum.py`
+now records `attempt_times` and retries a failed POST once, not twice.
+
+1. **Secrets and variables** (Settings → Secrets and variables → Actions):
+   * secrets: `CANVAS_FORUM_TOKEN` (a fresh Canvas token just for HW4; revoke it after grading),
+     `ANTHROPIC_API_KEY`;
+   * variables: `CANVAS_BASE_URL` = `https://canvas.mit.edu`, `CANVAS_FORUM_TOPIC_ID` = `449948`.
+     `CANVAS_FORUM_COURSE_ID` is fixed to `40577` in the workflow.
+2. **Run it by hand:** Actions → *hw4-forum* → **Run workflow**, or
+   `gh workflow run hw4-forum.yml -f command=status`. `command` is `cycle` (default), `status`
+   or `report` (the report table lands in the run's summary page). `fault=lost_ack` runs the
+   lost-acknowledgement demo (sets `FORUM_FAULT` and `FORUM_FAULT_OK=1`).
+3. **Where state lives:** [`state/`](state/README.md), with `DATA_DIR` pointing at it. After every
+   run (even a failed one) the workflow commits it to `main` as
+   `hw4: state after run <run id> [skip ci]` (nothing to commit, no commit). Each run adds one
+   `status` line to `state/logs/forum.jsonl`; `state/logs/` is also uploaded as a run artifact
+   for 14 days. Runs never overlap (`concurrency: hw4-forum`) and stop after 10 minutes.
+4. **Pause:** the course team's control line (`COURSE-TEAM CONTROL: PAUSED`) stops posting with
+   nothing to change here. To stop the runner itself: Actions → *hw4-forum* → **⋯** →
+   **Disable workflow** (enable it again the same way).
+5. **Un-halt:** after 3 failures in a row or a rejected token the tool writes
+   `state/memory/forum-halt` and every later run refuses to post. Fix the cause, then
+   `git rm state/memory/forum-halt && git commit -m "hw4: un-halt" && git push`.
+6. **Tests** (no network, no secrets): `python3 -m unittest discover -s tests`.
+
+Note: `scripts/make-submission-zip.sh` (HW3) refuses any tree that contains `forum-state.json` or
+`forum.jsonl`, so once a run has committed `state/` it no longer builds from `main`.
 
 ---
 
