@@ -41,7 +41,8 @@ were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritim
 │   ├── install-jobs.sh           ← creates the 6 OpenClaw cron jobs (ET) from triggers/*.md
 │   ├── make-submission-zip.sh    ← HW3 ZIP from git HEAD; refuses secrets and runtime files (SYL-109)
 │   ├── redact-evidence.py        ← stdin → stdout: secrets, emails, other users' ids out of evidence (SYL-109)
-│   └── hw4-log-status.py         ← one `forum status` line per Actions run into forum.jsonl (SYL-112)
+│   ├── hw4-log-status.py         ← one `forum status` line per Actions run into forum.jsonl (SYL-112)
+│   └── hw4-cycle.py              ← HW4 driver: read, classify, offer, choose a provider, request (SYL-113)
 ├── workspace/                    ← our half of the OpenClaw workspace (installed by install-workspace.sh)
 │   ├── AGENTS.md                 ← operating instructions: phases, stop rules, ask-a-human, hard rules
 │   ├── SOUL.md                   ← persona / tone / boundaries
@@ -70,6 +71,8 @@ were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritim
 │   │   └── forum/                ← HW3 agent forum: read / post / skip with memory and write guards (SYL-107)
 │   │       ├── SKILL.md
 │   │       └── scripts/forum.py    (+ `forum` symlink)
+│   ├── hw4/                      ← HW4 driver parts (SYL-113): model.py (Messages API client),
+│   │                               templates/ (offer + request texts), task/ (the function to test + 2 mutants)
 │   └── memory-templates/
 │       ├── prep-log.schema.json  ← JSON Schema for /data/memory/prep-log.json
 │       ├── brief.schema.json     ← JSON Schema for brief-writer output
@@ -95,6 +98,7 @@ were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritim
 │   ├── test_canvas.py            ← canvas skill tests, no network
 │   ├── test_forum.py             ← forum skill tests, fake Canvas, no network
 │   ├── test_workflow.py          ← HW4 workflow file, state/ ignore rules, hw4-log-status.py
+│   ├── test_hw4_cycle.py         ← HW4 driver: fake forum + fake model, budget, discovery, timeouts, dry run
 │   ├── test_redact.py            ← redact-evidence.py tests
 │   ├── test_submission_zip.py    ← make-submission-zip.sh tests (throwaway git repos)
 │   └── test_instructions.py      ← pins the hard rules in the instruction files and the deploy merge (python3 -m unittest discover -s tests -v)
@@ -213,6 +217,18 @@ now records `attempt_times` and retries a failed POST once, not twice.
    `state/memory/forum-halt` and every later run refuses to post. Fix the cause, then
    `git rm state/memory/forum-halt && git commit -m "hw4: un-halt" && git push`.
 6. **Tests** (no network, no secrets): `python3 -m unittest discover -s tests`.
+7. **The driver** ([`scripts/hw4-cycle.py`](scripts/hw4-cycle.py), SYL-113) is the agent loop: each
+   `cycle` reads the forum, classifies new entries with one model call (peer text capped at 1,500
+   chars and wrapped in nonce-delimited blocks; the prompt holds no env values), posts the service
+   offer once, then has a second model call rank the other offers against the need ("Python unit
+   tests, stdlib, a file I can run") and replies to the chosen one with the request
+   ([`workspace/hw4/templates/`](workspace/hw4/templates)) and a 24 h deadline. At most 2
+   `forum post` calls per cycle; a request past its deadline becomes `timed_out` and that provider
+   is not asked again; after 3 cycles with no fitting offer the bar drops to any offer about code,
+   Python, tests or review. Every choice is appended to `discovery` in `hw4-state.json`.
+   `python3 scripts/hw4-cycle.py status` prints the state; `HW4_DRY_RUN=1` does everything except
+   post or skip (forum.py runs on a throwaway copy of its memory) and prints `would_post`.
+   Optional variable `HW4_MODEL` (default `claude-sonnet-5-5`).
 
 Note: `scripts/make-submission-zip.sh` (HW3) refuses any tree that contains `forum-state.json` or
 `forum.jsonl`, so once a run has committed `state/` it no longer builds from `main`.

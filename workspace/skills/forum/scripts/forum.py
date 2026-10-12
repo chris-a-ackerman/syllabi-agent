@@ -550,13 +550,18 @@ def text_hash(markup):
 
 
 def render_message(text):
-    """Plain text -> the HTML we post: escaped, one <p> per paragraph, <br> for single newlines."""
-    paragraphs = [p for p in re.split(r"\n\s*\n", text.strip()) if p.strip()]
+    """Plain text -> the HTML we post: escaped, one <p> per paragraph, <br> for single newlines.
+    Leading spaces become &nbsp; so an indented code line (HW4's request) keeps its indentation."""
+    paragraphs = [p for p in re.split(r"\n(?:[ \t]*\n)+", text.strip()) if p.strip()]
     out = []
     for p in paragraphs:
-        lines = [html.escape(line.strip()) for line in p.strip().splitlines()]
+        lines = [_indent(line) + html.escape(line.strip()) for line in p.strip("\n").rstrip().splitlines()]
         out.append("<p>%s</p>" % "<br>".join(lines))
     return "".join(out)
+
+
+def _indent(line):
+    return "&nbsp;" * (len(line) - len(line.lstrip(" ")))
 
 
 def _cap(text, limit):

@@ -576,6 +576,12 @@ class PostGuardTests(ForumTestCase):
         self.assertEqual(st["posts"][0]["entry_id"], body["entry_id"])
         self.assertTrue(st["posts"][0]["verified"])
 
+    def test_leading_spaces_survive_as_nbsp_so_code_keeps_its_indentation(self):
+        self.ok("post", "--text-file", self.text_file("Code:\n\n    def f(x):\n        return x\n\nEnd"))
+        data = urllib.parse.parse_qs(self.fake.posts()[0][3].decode())["message"][0]
+        self.assertEqual(data, "<p>Code:</p><p>" + "&nbsp;" * 4 + "def f(x):<br>" + "&nbsp;" * 8
+                         + "return x</p><p>End</p>")
+
     def test_duplicate_text_to_the_same_parent_is_refused(self):
         first = self.ok("post", "--text-file", self.text_file("Same words."))
         code, body = self.post("  same   WORDS. ")
