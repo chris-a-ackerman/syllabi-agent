@@ -32,7 +32,7 @@ class WorkflowFileTests(unittest.TestCase):
         self.lines = self.text.splitlines()
 
     def test_required_settings(self):
-        for needle in ("concurrency", "group: hw4-forum", "cancel-in-progress: false", "timeout-minutes: 10",
+        for needle in ("concurrency", "group: hw4-forum", "cancel-in-progress: false", "timeout-minutes: 20",
                        "permissions:", "contents: write", "DATA_DIR", "[skip ci]", 'cron: "17 */2 * * *"',
                        "workflow_dispatch", "actions/checkout@v4", "ref: main", "fetch-depth: 0",
                        "retention-days: 14", 'CANVAS_FORUM_COURSE_ID: "40577"', "TZ: America/New_York",

@@ -32,7 +32,7 @@ permissions:
 jobs:
   forum:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20   # a first read can mean several model calls of up to 120 s each
     steps:
       - name: checkout
         id: checkout
@@ -49,6 +49,7 @@ jobs:
           CANVAS_FORUM_TOKEN: ${{ secrets.CANVAS_FORUM_TOKEN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           HW4_MODEL: ${{ vars.HW4_MODEL }}
+          HW4_EFFORT: ${{ vars.HW4_EFFORT }}
           DATA_DIR: ${{ github.workspace }}/state
           TZ: America/New_York
           FORUM_COMMAND: ${{ inputs.command || 'cycle' }}
