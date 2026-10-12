@@ -44,6 +44,9 @@ podcasts/
 /state/work/**
 !/state/work/forum/
 !/state/work/forum/.gitkeep
+# HW4-4 (SYL-115): delivered results (public forum content) are kept; sandbox/ scratch is not.
+!/state/work/hw4/
+!/state/work/hw4/result-*.py
 
 # Tooling
 # scripts/make-submission-zip.sh output

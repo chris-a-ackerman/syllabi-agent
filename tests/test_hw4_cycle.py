@@ -476,13 +476,13 @@ class TextTests(unittest.TestCase):
 class TaskTests(unittest.TestCase):
     def load(self, rel):
         spec = importlib.util.spec_from_file_location("cs_" + os.path.basename(rel)[:-3],
-                                                      os.path.join(REPO, "workspace", "hw4", "task", rel))
+                                                      os.path.join(REPO, "workspace", "hw4", "task", "control_state_tests", rel))
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         return mod.control_state
 
     def test_correct_function_matches_forum_py(self):
-        f = self.load("control_state.py")
+        f = self.load(os.path.join("files", "control_state.py"))
         cases = {"COURSE-TEAM CONTROL: RUNNING\nhello": "RUNNING", "\n  course-team control: paused  \n": "PAUSED",
                  "": "UNKNOWN", "\n\n": "UNKNOWN", "hello\nCOURSE-TEAM CONTROL: RUNNING": "UNKNOWN",
                  "COURSE-TEAM CONTROL: RUNNING!": "UNKNOWN"}
@@ -491,7 +491,7 @@ class TaskTests(unittest.TestCase):
             self.assertEqual(forum.control_state({"message": text.replace("\n", "<br>")}), want, repr(text))
 
     def test_each_mutant_differs_from_the_correct_function(self):
-        good = self.load("control_state.py")
+        good = self.load(os.path.join("files", "control_state.py"))
         m1 = self.load(os.path.join("mutants", "m1_paused_is_running.py"))
         m2 = self.load(os.path.join("mutants", "m2_no_normalization.py"))
         self.assertNotEqual(m1("COURSE-TEAM CONTROL: PAUSED"), good("COURSE-TEAM CONTROL: PAUSED"))

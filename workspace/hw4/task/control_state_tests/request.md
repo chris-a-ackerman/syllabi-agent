@@ -2,7 +2,7 @@ REQUEST: unit tests for a small Python function (from class-prep-agent, an autom
 
 Input: the function below, standalone, standard library only. It reads the first non-empty line of a forum description and returns "RUNNING", "PAUSED" or "UNKNOWN". The line is compared after stripping surrounding whitespace and upper-casing. Empty input is "UNKNOWN".
 
-{function_source}
+{files}
 
 Expected result: one Python unittest file in a code block, with a class named TestControlState. Import the function as "from control_state import control_state".
 

@@ -459,7 +459,7 @@ Canvas endpoints, base `$CANVAS_BASE_URL/api/v1/courses/{course}/discussion_topi
 | Command | Inputs | Output (`ok: true` plus) |
 | --- | --- | --- |
 | `read` | `--limit N` (default 50) | `note, control: RUNNING\|PAUSED\|UNKNOWN, control_error?, new: [{id, parent_id, thread_id, author: "user <id>", created_at, text (≤ 4,000, or `FORUM_ENTRY_TEXT_CAP`), truncated?, context? (≤ 1,000, replies only)}], threads, seen_total, own_posts, pending, remaining?`. `new` = not in memory, not the agent's own user id, not deleted, oldest first. Returned ids are stored as seen. |
-| `entry` | `--id <entry_id>` | `note, entry: {id, parent_id, thread_id, author, created_at, text, truncated?}` for one live entry (HW4-3). Read-only: nothing is stored as seen, nothing logged. |
+| `entry` | `--id <entry_id>`, `--keep-indent?` | `note, entry: {id, parent_id, thread_id, author, created_at, text, truncated?}` for one live entry (HW4-3). Read-only: nothing is stored as seen, nothing logged. `--keep-indent` (HW4-4) keeps leading spaces (`&nbsp;`, `<pre>`) so delivered Python code survives; the plain text strips every line. |
 | `post` | `--text-file` (under `$DATA_DIR/work/forum/`), `--reply-to <entry_id>?`, `--continuation?` | `entry_id, html_url, verified: true, parent_id, attempts, reconciled?`. A duplicate is `duplicate: true, code: FORUM_DUPLICATE, entry_id, html_url` with exit 0, and nothing is posted |
 | `skip` | `--reason` | `decision: "skip", reason, ts` |
 | `status` | | `control, control_checked, halted, halt?, self_user_id, seen_total, own_posts, pending, abandoned, posts_last_hour, attempts_last_hour, rate_limit, consecutive_failures, max_failures, last_cycle_at` (read-only; no Canvas call while halted) |
@@ -555,3 +555,94 @@ without a second POST. Without `FORUM_FAULT_OK=1` the hook is ignored (logged as
 | `USAGE` | bad arguments/config | no | fix the call |
 
 Tests (fake transport, no network): `tests/test_forum.py`, run with `python3 -m unittest discover -s tests`.
+
+## 10. HW4-4: checking delivered work (`sandbox.py`, `checks.py`, a task's `verify.py`)
+
+The HW4 driver (`scripts/hw4-cycle.py`, SYL-115) checks the work another agent delivers for its
+request mechanically, decides, and uses accepted work. Everything that knows what the job is lives
+in a task package, `workspace/hw4/task/$HW4_TASK/` (default `control_state_tests`; recipe in
+`workspace/hw4/task/README.md`): `request.md`, `need.txt`, `files/`, private check data
+(`mutants/`) and `verify.py`. The driver, `checks.py` and `sandbox.py` are generic.
+
+**Detect.** A result candidate is a new entry in the request thread (the provider's offer thread)
+that replies to one of the agent's own entries there (the request, a correction request, an
+answer) or is by the provider's user id. Oldest first, at most one per cycle, only entries read
+after the request was sent:
+
+| classified as | by | action |
+| --- | --- | --- |
+| `decline_for_me` | the provider | `status = rejected`, `reason = provider declined`, provider into `tried_providers`; nothing runs, nothing is posted |
+| `question_for_me` | a direct reply, or the provider | first time: one model call answers from the request's own text (structured output `{answer}`, question delimited as untrusted), a reply, deadline +12 h. Later questions are ignored |
+| anything else | a direct reply, or the provider classified `result_for_me` | `forum entry --id <id> --keep-indent`; code extracted; no code and not classified `result_for_me` → ignored (chatter); otherwise checked |
+
+**Extract** (`checks.extract_code`): fenced blocks (```` ``` ```` or `~~~`, no language or
+`python`) first, joined when they parse together, else the longest that parses; else the longer of
+the longest 4-space-indented run (dedented) and the longest run of lines from an
+`import`/`from`/`class`/`def` line that `ast.parse` accepts. Saved to
+`$DATA_DIR/work/hw4/result-<entry_id>.py` (committed; it is public forum content).
+
+**Static checks** (`checks.static_check(code, allowed, min_tests)`, nothing executed): `ast.parse`
+succeeds; every import's root module is on the task's allow-list (control_state_tests:
+`unittest, re, typing, string, textwrap, itertools, functools, control_state`) and never `os, sys,
+subprocess, socket, urllib, http, pathlib, shutil, importlib, builtins` (and a few more); no
+relative import; no name `eval, exec, open, __import__, compile, breakpoint, globals, locals` or
+a bare `os`/`sys`/… name; no dunder escape attribute (`__subclasses__`, `__globals__`, `__bases__`,
+…) as an attribute or inside a string; one `unittest.TestCase` subclass with ≥ `min_tests` (3)
+`test*` methods. The first failure is the reason.
+
+**Sandbox** (`sandbox.run_unittest(files, workdir)` → `{exit, output (last 64 KB), timed_out,
+mode}`): the files (plain names only) go into a fresh directory under `workdir`, which is removed
+afterwards, and `python -m unittest -v` runs there:
+
+    docker run --rm --name hw4-sandbox-<hex> --network none --memory 512m --pids-limit 128 --cpus 1
+        --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges --user nobody:nogroup
+        -e PYTHONDONTWRITEBYTECODE=1 -v <dir>:/work:ro -w /work python:3.12-slim
+        timeout 60 python -m unittest -v
+
+`HW4_SANDBOX=subprocess` (local runs only, never in the workflow) runs the same command with this
+Python, `timeout=60`, `cwd=<dir>`. In both modes the child's env is built from scratch,
+`{"PATH": "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin", "PYTHONDONTWRITEBYTECODE": "1"}`, and
+never copies `os.environ`, so `CANVAS_FORUM_TOKEN` and `ANTHROPIC_API_KEY` (which the cycle step
+has) never reach the tests; docker gets no other `-e`. The workflow pulls the image in its own
+step, with no secrets in its env, so a run needs no network. Docker missing → `SandboxError` →
+the cycle exits 2 with `HW4_SANDBOX` and the result is checked again next cycle (our failure
+never counts against the provider). `passed(r)`: exit 0 and unittest's `OK`. `failed(r)`: exit
+≠ 0, not timed out, and at least one `FAIL:`/`ERROR:` line.
+
+**verify.py** (control_state_tests): `verify(result_code, workdir, runner=None)` →
+`{ok, checks: {static, correct, m1, m2, output_excerpt}, summary, lines}`. Static fail → nothing
+runs. Otherwise three runs, each with the tests as `test_delivered.py` and one implementation as
+`control_state.py`: `files/control_state.py` (must pass), `mutants/m1_paused_is_running.py` and
+`mutants/m2_no_normalization.py` (each must fail). `lines` are the three outcomes;
+`output_excerpt` (≤ 600 characters) starts at the first `FAIL:`/`ERROR:` of the first failing
+run, or is the tail of a run that should have failed. `adopt(result_code, header_lines)` →
+`("tests/test_hw4_delegated_control_state.py", text)`: the 3-line header, a `sys.path` line for
+`workspace/hw4/task/control_state_tests/files/`, then the delivered file unchanged. The driver
+writes only paths matching `tests/test_hw4_delegated_*.py`.
+
+**Decide** (one reply to the result entry, scrubbed of secret values; the state changes only once
+it is posted):
+
+| outcome | reply | state |
+| --- | --- | --- |
+| all checks pass | `RESULT CHECKED: accepted`, the three outcome lines, and `Tip: 5 coins for request <request_entry_id>, because …` (3 coins after a correction) | `status = accepted`, `tip`, `checks`, `adopted`; the test file is written and the workflow commits it |
+| a check fails, first result, before the deadline | `RESULT CHECKED: correction requested`: the failing check and the output excerpt (indented), new deadline | `status = correction_requested`, `correction_entry_id`, deadline = now + 12 h |
+| a check fails on the second result, or the first came after the deadline | `RESULT CHECKED: rejected`, the reason, no tip | `status = rejected`, `tip = 0`, provider into `tried_providers`; the next choice skips it |
+| correction deadline passes with no new result | none (the result already has its reply) | `status = rejected`, `tip = 0`, provider into `tried_providers` |
+
+Every decision appends one `hw4.jsonl` line `{ts, event: "verdict", decision, task,
+request_entry_id, provider_entry_id, result_entry_id, attempt, checks, tip, reason}` besides the
+cycle's own line. The tip is posted once, inside the acceptance reply (forum.py's duplicate guard
+covers a retry). A tip received on the agent's own deliveries (HW4-3) is only recorded on the job.
+`HW4_DRY_RUN=1` runs the checks and prints the verdict in `would_post`, and writes no result file,
+no test file and no state. A post refused by a guard (rate, pause) changes nothing; the next cycle
+checks the result again.
+
+| code | when | action |
+| --- | --- | --- |
+| `HW4_SANDBOX` | docker missing or failing | exit 2; fix the runner; the result is rechecked next cycle |
+| `HW4_ADOPT` | a task's `adopt()` names a path outside `tests/test_hw4_delegated_*.py` | exit 2; fix the task package |
+| `USAGE` | `HW4_TASK` names no package (`[a-z0-9_]`, with request.md, need.txt, verify.py) | exit 2; fix the variable |
+
+Tests (stub runner, fake forum and model, no network): `tests/test_hw4_verify.py`; one test runs
+the real docker sandbox on `tests/fixtures/hw4_good_tests.py` when docker and the image are there.
