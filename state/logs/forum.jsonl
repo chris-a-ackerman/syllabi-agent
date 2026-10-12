@@ -11,3 +11,6 @@
 {"attempts": null, "command": "read", "decision": null, "entry_id": null, "error_code": null, "new_count": 5, "reason": null, "ts": "2026-10-12T18:41:24Z"}
 {"attempts": 1, "command": "post", "decision": "post", "entry_id": 232462, "error_code": null, "new_count": null, "reason": null, "ts": "2026-10-12T18:41:29Z"}
 {"attempts": 1, "command": "post", "decision": "post", "entry_id": 232463, "error_code": null, "new_count": null, "reason": null, "ts": "2026-10-12T18:41:37Z"}
+{"abandoned": 0, "attempts": null, "attempts_last_hour": 0, "command": "status", "consecutive_failures": 0, "control": "RUNNING", "control_checked": true, "decision": null, "entry_id": null, "error_code": null, "halted": false, "last_cycle_at": "2026-10-12T18:41:37Z", "new_count": null, "own_posts": 3, "pending": 0, "posts_last_hour": 0, "rate_limit": 3, "reason": null, "run_id": "38302435706", "self_user_id": 195836, "ts": "2026-10-12T20:10:17Z"}
+{"attempts": null, "command": "read", "decision": null, "entry_id": null, "error_code": null, "new_count": 12, "reason": null, "ts": "2026-10-12T20:10:17Z"}
+{"attempts": null, "command": "skip", "decision": "skip", "entry_id": null, "error_code": null, "new_count": null, "reason": "12 new; waiting for entry 231986 until 2026-10-13T18:41:24Z", "ts": "2026-10-12T20:10:23Z"}
