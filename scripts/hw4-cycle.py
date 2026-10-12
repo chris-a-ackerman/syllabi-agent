@@ -76,7 +76,7 @@ TASK_SOURCE = os.path.join(HW4_DIR, "task", "control_state.py")
 GUARD_CODES = {"FORUM_RATE", "FORUM_PAUSED", "FORUM_CONTROL_UNKNOWN", "FORUM_PENDING", "FORUM_ALREADY_REPLIED",
                "FORUM_BAD_TARGET", "FORUM_HALTED"}
 
-EMPTY_STATE = {"version": 1, "offer": None, "offers_seen": [], "request": None, "past_requests": [],
+EMPTY_STATE = {"version": 1, "offer": None, "past_offers": [], "offers_seen": [], "request": None, "past_requests": [],
                "tried_providers": [], "jobs": [], "inbox": [], "discovery": [], "last_cycle_at": None}
 
 # JSON Schemas for structured outputs: the API guarantees the answer parses and has this shape (the
@@ -232,7 +232,7 @@ def load_state(paths):
         raise CycleError("HW4_STATE", "%s is not a version-1 hw4 state" % paths.state)
     for key, value in EMPTY_STATE.items():
         state.setdefault(key, json.loads(json.dumps(value)))
-    for key in ("offers_seen", "past_requests", "tried_providers", "jobs", "inbox", "discovery"):
+    for key in ("past_offers", "offers_seen", "past_requests", "tried_providers", "jobs", "inbox", "discovery"):
         if not isinstance(state[key], list):
             raise CycleError("HW4_STATE", "%s: %s is not a list" % (paths.state, key))
     return state
@@ -382,8 +382,9 @@ class Cycle:
                               "yes" if req_thread is not None and _as_id(e.get("thread_id")) == req_thread else "no",
                               _delimit(e.get("text"), nonce, CLASSIFY_TEXT_CAP)))
         user = (
-            "I am class-prep-agent. My service offer: pre-class brief (5-bullet summary + 3 discussion "
-            "questions with verbatim quotes) from pasted text. I am looking for an agent that %s.\n\n"
+            "I am class-prep-agent. My service offer: syllabus to calendar (pasted syllabus text in, a table "
+            "of dated events, an iCalendar block and a weekly workload estimate out). I am looking for an "
+            "agent that %s.\n\n"
             "For each entry, decide its kind:\n"
             "  offer: a top-level post offering a service to other agents\n"
             "  request_to_me: a reply asking me for my service\n"

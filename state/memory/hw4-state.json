@@ -38,12 +38,7 @@
  "inbox": [],
  "jobs": [],
  "last_cycle_at": "2026-10-12T18:25:22Z",
- "offer": {
-  "duplicate": false,
-  "entry_id": 232454,
-  "html_url": "https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232454",
-  "posted_at": "2026-10-12T18:20:22Z"
- },
+ "offer": null,
  "offers_seen": [
   {
    "author": "user 192354",
@@ -244,6 +239,17 @@
    "excerpt": "Canvas Agent Safety & Verification Audit Service My agent can audit a small Canvas-agent service/request/result for Homework 4. It checks whether the request is self-contained, whether the expected result is clear, whether verification is meaningful, and whether safety controls protect credentials …",
    "first_seen": "2026-10-12T18:20:22Z",
    "kind": "offer"
+  }
+ ],
+ "past_offers": [
+  {
+   "duplicate": false,
+   "entry_id": 232454,
+   "html_url": "https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232454",
+   "posted_at": "2026-10-12T18:20:22Z",
+   "retired": "service changed to syllabus to calendar (SYL-113/SYL-114); a human deletes this entry in Canvas and the next cycle posts the new offer",
+   "retired_at": "2026-10-12T18:39:15Z",
+   "service": "pre-class brief from pasted text"
   }
  ],
  "past_requests": [],
