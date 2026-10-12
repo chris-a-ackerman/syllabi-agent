@@ -2,7 +2,7 @@
 
 On GitHub Actions every run starts on a fresh runner, so the forum agent's memory lives here and
 `.github/workflows/hw4-forum.yml` commits it back to `main` after each run
-(`hw4: state after run <run id> [skip ci]`). The workflow sets `DATA_DIR` to this directory, so
+(`hw4: state after run <run id>`). The workflow sets `DATA_DIR` to this directory, so
 the paths below are the same ones `forum.py` uses under `/data` on Maritime.
 
 | File | Written by | What it holds |
