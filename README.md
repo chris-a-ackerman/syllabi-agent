@@ -42,7 +42,7 @@ were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritim
 │   ├── make-submission-zip.sh    ← HW3 ZIP from git HEAD; refuses secrets and runtime files (SYL-109)
 │   ├── redact-evidence.py        ← stdin → stdout: secrets, emails, other users' ids out of evidence (SYL-109)
 │   ├── hw4-log-status.py         ← one `forum status` line per Actions run into forum.jsonl (SYL-112)
-│   └── hw4-cycle.py              ← HW4 driver: read, classify, offer, choose a provider, request (SYL-113)
+│   └── hw4-cycle.py              ← HW4 driver: read, classify, offer, one job, choose a provider, request (SYL-113/114)
 ├── workspace/                    ← our half of the OpenClaw workspace (installed by install-workspace.sh)
 │   ├── AGENTS.md                 ← operating instructions: phases, stop rules, ask-a-human, hard rules
 │   ├── SOUL.md                   ← persona / tone / boundaries
@@ -72,7 +72,8 @@ were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritim
 │   │       ├── SKILL.md
 │   │       └── scripts/forum.py    (+ `forum` symlink)
 │   ├── hw4/                      ← HW4 driver parts (SYL-113): model.py (Messages API client),
-│   │                               templates/ (offer + request texts), task/ (the function to test + 2 mutants)
+│   │                               templates/ (offer + request texts), task/ (the function to test + 2 mutants),
+│   │                               services/syllabus_calendar.py (the offered service, SYL-114)
 │   └── memory-templates/
 │       ├── prep-log.schema.json  ← JSON Schema for /data/memory/prep-log.json
 │       ├── brief.schema.json     ← JSON Schema for brief-writer output
@@ -99,6 +100,8 @@ were verified on 2026-09-24: see [`docs/deploy-maritime.md`](docs/deploy-maritim
 │   ├── test_forum.py             ← forum skill tests, fake Canvas, no network
 │   ├── test_workflow.py          ← HW4 workflow file, state/ ignore rules, hw4-log-status.py
 │   ├── test_hw4_cycle.py         ← HW4 driver: fake forum + fake model, budget, discovery, timeouts, dry run
+│   ├── test_hw4_provider.py      ← HW4 service: syllabus → calendar jobs, date checks, ICS, declines (SYL-114)
+│   ├── fixtures/hw4_syllabus.txt ← a pasted syllabus with 12 dated lines
 │   ├── test_redact.py            ← redact-evidence.py tests
 │   ├── test_submission_zip.py    ← make-submission-zip.sh tests (throwaway git repos)
 │   └── test_instructions.py      ← pins the hard rules in the instruction files and the deploy merge (python3 -m unittest discover -s tests -v)
@@ -232,6 +235,22 @@ now records `attempt_times` and retries a failed POST once, not twice.
    Classification runs 25 entries per model call. If a model call fails, the cycle exits 2 but
    still saves the new offers and replies in its own threads, because `forum read` has already
    marked them as seen.
+8. **The service** (HW4-3, SYL-114): every reply in the offer thread by someone else becomes a job in
+   `hw4-state.json`; one job per cycle, oldest first. The request's text is fetched with
+   `forum entry` (never stored), checked without the model (500–12,000 characters, at least 3
+   dates, no "run / fetch / post this for me"; otherwise a fixed decline that repeats nothing), and
+   sent to one model call in
+   [`workspace/hw4/services/syllabus_calendar.py`](workspace/hw4/services/syllabus_calendar.py) that
+   returns events, each with a `source` quoted from the text. Code then drops every event whose
+   source is not in the text verbatim or does not name that month and day (more than 20 % dropped
+   or fewer than 3 left: one regeneration, then a decline), builds the iCalendar block, re-parses it
+   after a `render_message` → `html_to_text` round trip, adds hours per ISO week, and replies to the
+   request. The workflow raises the forum caps for this (`FORUM_TEXT_MAX=8000`,
+   `FORUM_ENTRY_TEXT_CAP=12000`); a reply that still does not fit goes out as the table + estimate,
+   then the calendar in the next cycle as a reply to it (`forum post --continuation`). Tips are
+   recorded on the job and never answered. Run it on its own:
+   `python3 workspace/hw4/services/syllabus_calendar.py extract syllabus.txt > out.json`, then
+   `… render out.json` (the reply) or `… render out.json --ics > calendar.ics`.
 
 Note: `scripts/make-submission-zip.sh` (HW3) refuses any tree that contains `forum-state.json` or
 `forum.jsonl`, so once a run has committed `state/` it no longer builds from `main`.

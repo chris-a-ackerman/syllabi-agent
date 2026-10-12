@@ -2,7 +2,8 @@
 """forum: the Canvas agent-forum tool for class-prep-agent (SYL-107, AI Studio HW3).
 
     forum.py [--now ISO] [-v] read [--limit N]
-    forum.py [--now ISO] [-v] post --text-file <path> [--reply-to <entry_id>]
+    forum.py [--now ISO] [-v] post --text-file <path> [--reply-to <entry_id> [--continuation]]
+    forum.py [--now ISO] [-v] entry --id <entry_id>
     forum.py [--now ISO] skip --reason "<text>"
     forum.py [--now ISO] [-v] status
     forum.py [--now ISO] report [--since ISO]
@@ -15,8 +16,10 @@ for `post` (docs/tool-contract.md §9):
     2. reconcile       pending intents found in the forum move to posts (never posted twice)
     3. control line    fresh GET of the topic; first line must be "COURSE-TEAM CONTROL: RUNNING"
                        (PAUSED -> FORUM_PAUSED, anything else -> FORUM_CONTROL_UNKNOWN; fail closed)
-    4. text checks     1-2000 chars, no secret env values, no "syl_agent_"    -> FORUM_TEXT
+    4. text checks     1-2000 chars (FORUM_TEXT_MAX), no secret env values, no "syl_agent_"
+                                                                             -> FORUM_TEXT
     5. target check    --reply-to is a live entry in this topic, not our own -> FORUM_BAD_TARGET
+                       (--continuation: the target must be our own *reply*, for a "part 2")
     6. duplicates      same parent + same text hash -> ok, duplicate: true; a second reply to the
                        same parent -> FORUM_ALREADY_REPLIED
     7. rate limit      3 write attempts (retries included) per trailing 60 minutes, counted from
@@ -41,6 +44,8 @@ Environment:
     DATA_DIR                default /data. State: memory/forum-state.json, halt switch:
                             memory/forum-halt, log: logs/forum.jsonl, post texts: work/forum/
                             (on GitHub Actions: $GITHUB_WORKSPACE/state, committed after each run)
+    FORUM_TEXT_MAX          longest post in characters (default 2000; HW4's workflow sets 8000)
+    FORUM_ENTRY_TEXT_CAP    entry text returned by `read` (default 4000; HW4's workflow sets 12000)
     FORUM_FAULT=lost_ack    test hook (only with FORUM_FAULT_OK=1): do the real POST, then drop
                             the response as if it timed out
 
@@ -250,6 +255,8 @@ class Config:
         self.now = parse_iso(now, "--now") if now else now_utc()
         self.verbose = verbose
         self.secrets = secret_values(env)
+        self.text_max = _positive_int(env, "FORUM_TEXT_MAX", TEXT_MAX)
+        self.entry_text_cap = _positive_int(env, "FORUM_ENTRY_TEXT_CAP", ENTRY_TEXT_CAP)
         self.fault = (env.get("FORUM_FAULT") or "").strip()
         self.fault_ok = (env.get("FORUM_FAULT_OK") or "").strip() == "1"
 
@@ -263,6 +270,15 @@ class Config:
 
     def entry_html_url(self, entry_id):
         return "%s#entry-%s" % (self.topic_html_url, entry_id)
+
+
+def _positive_int(env, name, default):
+    raw = (env.get(name) or "").strip()
+    if not raw:
+        return default
+    if not re.fullmatch(r"[0-9]{1,6}", raw) or int(raw) < 1:
+        raise usage("%s must be a positive whole number of characters" % name)
+    return int(raw)
 
 
 def scrub(text, secrets):
@@ -948,7 +964,7 @@ def cmd_read(ctx, args):
     now = fmt(cfg.now)
     out = []
     for e in shown:
-        text, truncated = _cap(html_to_text(e["message"]), ENTRY_TEXT_CAP)
+        text, truncated = _cap(html_to_text(e["message"]), cfg.entry_text_cap)
         item = {"id": e["id"], "parent_id": e["parent_id"], "thread_id": e["thread_id"],
                 "author": "user %s" % e["user_id"] if e["user_id"] is not None else "unknown",
                 "created_at": e.get("created_at"), "text": text}
@@ -970,6 +986,29 @@ def cmd_read(ctx, args):
     if control_error:
         result["control_error"] = control_error
     return result
+
+
+def cmd_entry(ctx, args):
+    """One live entry by id, read-only: nothing is marked as seen. HW4's driver uses it to fetch a
+    request's text in the cycle that does the job, so peer text never has to be kept in its state."""
+    cfg = ctx.cfg
+    if is_halted(cfg):
+        raise ForumError("FORUM_HALTED", "the forum is halted (%s exists); a human must delete it"
+                         % cfg.halt_path, detail=read_halt(cfg))
+    entry_id = _as_id(args.id)
+    entries = ctx.forum()
+    e = next((x for x in entries if x["id"] == entry_id), None) if entry_id is not None else None
+    if e is None or e["deleted"]:
+        raise ForumError("FORUM_BAD_TARGET", "--id is not a live entry in this forum topic",
+                         detail={"id": _short(args.id, 40)})
+    text, truncated = _cap(html_to_text(e["message"]), cfg.entry_text_cap)
+    item = {"id": e["id"], "parent_id": e["parent_id"], "thread_id": e["thread_id"],
+            "author": "user %s" % e["user_id"] if e["user_id"] is not None else "unknown",
+            "created_at": e.get("created_at"), "text": text}
+    if truncated:
+        item["truncated"] = True
+    ctx.rec.update({"entry_id": e["id"]})
+    return {"ok": True, "note": UNTRUSTED_NOTE, "entry": item}
 
 
 # --------------------------------------------------------------------------- post
@@ -995,9 +1034,9 @@ def _check_text(cfg, text):
     trimmed = text.strip()
     if not trimmed:
         raise ForumError("FORUM_TEXT", "the post is empty")
-    if len(trimmed) > TEXT_MAX:
-        raise ForumError("FORUM_TEXT", "the post is %d characters; the limit is %d" % (len(trimmed), TEXT_MAX),
-                         detail={"length": len(trimmed), "limit": TEXT_MAX})
+    if len(trimmed) > cfg.text_max:
+        raise ForumError("FORUM_TEXT", "the post is %d characters; the limit is %d" % (len(trimmed), cfg.text_max),
+                         detail={"length": len(trimmed), "limit": cfg.text_max})
     for value in cfg.secrets:
         if value in trimmed:
             raise ForumError("FORUM_TEXT", "the post contains the value of a secret environment variable; "
@@ -1147,9 +1186,16 @@ def cmd_post(ctx, args):
         if target is None or target["deleted"]:
             raise ForumError("FORUM_BAD_TARGET", "--reply-to is not a live entry in this forum topic",
                              detail={"reply_to": _short(args.reply_to, 40)})
-        if target["user_id"] == self_id:
+        if args.continuation:
+            # A "part 2" goes under this agent's own reply (never under a thread it started).
+            if target["user_id"] != self_id or target["parent_id"] is None:
+                raise ForumError("FORUM_BAD_TARGET", "--continuation needs --reply-to to be one of this agent's "
+                                 "own replies", detail={"reply_to": target_id})
+        elif target["user_id"] == self_id:
             raise ForumError("FORUM_BAD_TARGET", "--reply-to is this agent's own entry", detail={"reply_to": target_id})
         parent = target_id
+    elif args.continuation:
+        raise usage("--continuation needs --reply-to")
     # 6. duplicates
     for p in st["posts"]:
         if p.get("parent_id") == parent and p.get("hash") == digest:
@@ -1341,7 +1387,7 @@ def _failure(ctx, err):
 
 def run(cfg, args):
     command = args.command
-    readonly = command in ("status", "report")
+    readonly = command in ("status", "report", "entry")
     counted = command in ("read", "post")
     with Store(cfg, readonly=readonly) as store:
         ctx = Ctx(cfg, store)
@@ -1393,6 +1439,7 @@ def _log_command(ctx, command, error=None):
 
 COMMANDS = {
     "read": cmd_read,
+    "entry": cmd_entry,
     "post": cmd_post,
     "skip": cmd_skip,
     "status": cmd_status,
@@ -1429,9 +1476,14 @@ def build_parser():
     s.add_argument("--limit", type=_limit, default=READ_LIMIT_DEFAULT,
                    help="at most this many new entries (oldest first); the rest stay unseen")
 
+    s = sub.add_parser("entry", help="one live entry by id (read-only; nothing is marked as seen)")
+    s.add_argument("--id", required=True, help="the entry id")
+
     s = sub.add_parser("post", help="post a new thread or one reply, with every guard applied")
     s.add_argument("--text-file", required=True, help="plain text under $DATA_DIR/work/forum/")
     s.add_argument("--reply-to", help="entry id to reply to (omit for a new thread)")
+    s.add_argument("--continuation", action="store_true",
+                   help="the reply continues this agent's own reply (a 'part 2'); --reply-to names that reply")
 
     s = sub.add_parser("skip", help="record a deliberate no-post cycle")
     s.add_argument("--reason", required=True)

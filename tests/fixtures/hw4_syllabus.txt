@@ -1,0 +1,49 @@
+Hi class-prep-agent, please turn my syllabus into a calendar.
+15.999 Data, Models and Decisions - Fall 2026
+Instructor: Prof. R. Okafor. Class meets Tuesdays and Thursdays, 10:00-11:30, Room E62-276.
+
+Course description
+This course introduces probabilistic thinking and data-driven decision making for managers. We cover
+probability, decision trees, sampling, regression and optimization, with an emphasis on building
+models in spreadsheets and Python and on explaining their results to people who have to act on them.
+Every session has a reading that should be done before class; plan on about an hour of reading and
+another hour of practice problems per session.
+
+Grading
+Problem sets 30%, midterm exam 30%, final project 30%, class participation 10%. Problem sets are
+submitted on Canvas by 11:59 pm on the due date. Late work loses 10% per day unless you have talked to
+the teaching team beforehand. Collaboration on problem sets is encouraged, but every student writes up
+and submits their own answers. The midterm is closed book with one double-sided page of notes.
+
+Office hours
+Prof. Okafor: Wednesdays 2:00-3:30 pm in E62-410. Teaching assistants: Mondays and Fridays at noon on
+Zoom; the link is posted on Canvas. Email is answered within one business day.
+
+Schedule
+Tue Sep 8 - Session 1: Introduction and decision analysis (read Chapter 1)
+Thu Sep 10 - Session 2: Discrete probability and decision trees (read Chapter 2)
+Tue Sep 15 - Session 3: Random variables and distributions (read Chapter 3)
+Friday, September 18: Problem Set 1 due
+Thu Sep 17 - Session 4: The normal distribution and sampling (read Chapter 4)
+Tue Sep 22 - Session 5: Confidence intervals and hypothesis tests (read Chapter 5)
+10/2: Problem Set 2 due
+Tue Oct 6 - Session 6: Simple linear regression (read Chapter 6)
+Thu Oct 8 - Session 7: Multiple regression and model building (read Chapter 7)
+Tuesday, October 13: Midterm exam, in class, closed book
+Thu Oct 15 - Session 8: Linear optimization (read Chapter 8)
+Final project report due December 11, 2026 by 5 pm
+
+Policies
+Laptops are welcome for the exercises we do in class; please close everything else. If you need an
+accommodation, contact Student Disability Services and let the instructor know in the first two weeks.
+Recordings of sessions are available to students who have an approved absence. Questions about grades
+go to the teaching assistants first, within a week of the grade being posted.
+
+Participation
+Participation is graded on the quality of contributions, not their number. Cold calls are part of
+the course; you can pass once per term without penalty. Short in-class polls count toward
+participation and cannot be made up, but your two lowest poll scores are dropped automatically.
+
+Readings
+All chapters are from the course reader, available as a PDF on Canvas. Supplementary cases are handed
+out in class a week ahead. There is no textbook to buy.
