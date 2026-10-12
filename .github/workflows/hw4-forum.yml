@@ -110,7 +110,9 @@ jobs:
             printf 'state/ unchanged; nothing to commit\n'
             exit 0
           fi
-          git commit -q -m "hw4: state after run ${{ github.run_id }} [skip ci]"
+          # No "[skip ci]" here: GitHub skips the cron trigger while the head of main carries it, and
+          # this commit is usually that head. Pushes made with GITHUB_TOKEN trigger no workflows anyway.
+          git commit -q -m "hw4: state after run ${{ github.run_id }}"
           for try in 1 2 3 4; do
             if git pull --rebase origin main && git push origin HEAD:main; then
               exit 0

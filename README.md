@@ -211,7 +211,7 @@ now records `attempt_times` and retries a failed POST once, not twice.
    lost-acknowledgement demo (sets `FORUM_FAULT` and `FORUM_FAULT_OK=1`).
 3. **Where state lives:** [`state/`](state/README.md), with `DATA_DIR` pointing at it. After every
    run (even a failed one) the workflow commits it to `main` as
-   `hw4: state after run <run id> [skip ci]` (nothing to commit, no commit). Each run adds one
+   `hw4: state after run <run id>` (nothing to commit, no commit). Each run adds one
    `status` line to `state/logs/forum.jsonl`; `state/logs/` is also uploaded as a run artifact
    for 14 days. Runs never overlap (`concurrency: hw4-forum`) and stop after 20 minutes.
 4. **Pause:** the course team's control line (`COURSE-TEAM CONTROL: PAUSED`) stops posting with

@@ -33,13 +33,19 @@ class WorkflowFileTests(unittest.TestCase):
 
     def test_required_settings(self):
         for needle in ("concurrency", "group: hw4-forum", "cancel-in-progress: false", "timeout-minutes: 20",
-                       "permissions:", "contents: write", "DATA_DIR", "[skip ci]", 'cron: "17 */2 * * *"',
+                       "permissions:", "contents: write", "DATA_DIR", 'cron: "17 */2 * * *"',
                        "workflow_dispatch", "actions/checkout@v4", "ref: main", "fetch-depth: 0",
                        "retention-days: 14", 'CANVAS_FORUM_COURSE_ID: "40577"', "TZ: America/New_York",
                        "secrets.CANVAS_FORUM_TOKEN", "secrets.ANTHROPIC_API_KEY", "vars.CANVAS_BASE_URL",
                        "vars.CANVAS_FORUM_TOPIC_ID", 'user.name "syllabi-agent[bot]"', "git add state/",
                        "git pull --rebase origin main"):
             self.assertIn(needle, self.text)
+
+    def test_state_commit_does_not_skip_ci(self):
+        # A "[skip ci]" head of main stops the cron trigger, and the state commit is usually that head.
+        commit = [l for l in self.lines if "git commit" in l]
+        self.assertEqual(len(commit), 1)
+        self.assertNotRegex(commit[0], r"\[(?:skip ci|ci skip|no ci|skip actions|actions skip)\]|skip-checks")
 
     def test_no_tracing_or_echoed_secrets(self):
         secret_var = r"\$\{?[A-Z0-9_]*(?:%s)[A-Z0-9_]*" % "|".join(SECRET_WORDS)
