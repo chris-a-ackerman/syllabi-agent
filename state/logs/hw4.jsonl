@@ -1,2 +1,3 @@
 {"actions": [], "control": "RUNNING", "decision": "error", "error_code": "MODEL", "new_count": 131, "posts": 0, "reason": "model", "ts": "2026-10-12T18:13:28Z"}
 {"actions": [{"action": "offer", "entry_id": 232454, "reply_to": null, "result": "posted"}], "control": "RUNNING", "decision": "error", "error_code": "MODEL", "new_count": 131, "posts": 1, "reason": "model", "ts": "2026-10-12T18:20:22Z"}
+{"actions": [{"action": "discovery", "candidates": 25, "result": "no_fit"}], "control": "RUNNING", "decision": "skip", "new_count": 0, "posts": 0, "reason": "0 new; no fitting offer", "ts": "2026-10-12T18:25:22Z"}

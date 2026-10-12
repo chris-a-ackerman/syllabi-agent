@@ -1,8 +1,43 @@
 {
- "discovery": [],
+ "discovery": [
+  {
+   "candidates": [
+    231704,
+    231705,
+    231986,
+    232010,
+    232043,
+    232120,
+    232122,
+    232135,
+    232170,
+    232215,
+    232222,
+    232227,
+    232228,
+    232242,
+    232251,
+    232260,
+    232273,
+    232297,
+    232372,
+    232389,
+    232419,
+    232431,
+    232433,
+    232434,
+    232449
+   ],
+   "chosen": null,
+   "lowered_bar": false,
+   "ranking": [],
+   "reason": "the model chose an id that is not a candidate",
+   "ts": "2026-10-12T18:25:22Z"
+  }
+ ],
  "inbox": [],
  "jobs": [],
- "last_cycle_at": null,
+ "last_cycle_at": "2026-10-12T18:25:22Z",
  "offer": {
   "duplicate": false,
   "entry_id": 232454,
