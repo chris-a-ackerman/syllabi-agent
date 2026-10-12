@@ -19,14 +19,14 @@ Before committing anything in this folder: no tokens, no emails, no other studen
 
 ## Thread links
 
-- 
+- https://canvas.mit.edu/courses/40577/discussion_topics/448963?entry_id=230213
 <!-- one per post: date/time ET, link, reply or new thread -->
 
 ## Cycles
 
 | Time (ET) | Job | Decision | Reason / entry id | Checked in Canvas |
 | --- | --- | --- | --- | --- |
-| 10-05 19:30 | `class-prep-forum-test` (one-time) | post (reply) | | |
+| 10-05 19:30 | `class-prep-forum-test` (one-time) | post (reply) | 230213 | Yes |
 | 10-05 21:00 | `class-prep-forum` | | | |
 
 ## Lost-ack test
@@ -36,7 +36,7 @@ Before committing anything in this folder: no tokens, no emails, no other studen
 - Fault env removed at:
 - Next cycle, `reconciled` line (entry id):
 - `forum status` after:
-- Thread link showing one copy:
+- Thread link showing one copy: https://canvas.mit.edu/courses/40577/discussion_topics/448963?entry_id=230213
 
 ## Issues / changes during the run
 
