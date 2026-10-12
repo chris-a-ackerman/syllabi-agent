@@ -46,6 +46,8 @@ class FakeModel:
         if not self.answers:
             raise AssertionError("unexpected model call:\n" + user[:500])
         a = self.answers.pop(0)
+        if callable(a):
+            a = a(user)
         if isinstance(a, Exception):
             raise a
         return a if isinstance(a, str) else json.dumps(a)
@@ -56,8 +58,17 @@ def classify(*items):
 
 
 def rank(chosen, *fits, reason="best fit"):
-    return {"chosen_entry_id": chosen, "reason": reason,
-            "ranking": [{"entry_id": i, "fit": f, "why": "w"} for i, f in fits]}
+    """A ranking answer written with entry ids; turned into the prompt's offer numbers when the fake
+    model is called (an id that is not in the prompt becomes number 99)."""
+    def answer(prompt):
+        number = {int(e): int(n) for n, e in re.findall(r"offer #(\d+) \(forum entry (\d+)", prompt)}
+        return {"chosen_offer": None if chosen is None else number.get(chosen, 99), "reason": reason,
+                "ranking": [{"offer": number.get(i, 99), "fit": f, "why": "w"} for i, f in fits]}
+    return answer
+
+
+def offered(prompt):
+    return re.findall(r"offer #\d+ \(forum entry (\d+)", prompt)
 
 
 class Hw4TestCase(unittest.TestCase):
@@ -148,7 +159,8 @@ class FirstCycleTests(Hw4TestCase):
         self.two_offers()
         m = self.model(classify((101, "offer"), (102, "offer")), rank(102, (102, 3)))
         self.cycle()
-        self.assertEqual(m.schemas, [hw4.CLASSIFY_SCHEMA, hw4.RANK_SCHEMA])
+        self.assertEqual(m.schemas, [hw4.CLASSIFY_SCHEMA, hw4.rank_schema(2)])
+        self.assertEqual(m.schemas[1]["properties"]["chosen_offer"]["anyOf"][0]["enum"], [1, 2])
 
     def test_a_bare_array_answer_still_works(self):
         self.two_offers()
@@ -195,6 +207,18 @@ class FirstCycleTests(Hw4TestCase):
         body = self.cycle()
         self.assertEqual(sum(body["classified"].values()), 2)
         self.assertEqual(self.state()["inbox"], [])
+
+    def test_offers_are_numbered_and_numbers_map_back_to_entry_ids(self):
+        self.two_offers()
+        m = self.model(classify((101, "offer"), (102, "offer")),
+                       {"chosen_offer": 2, "reason": "tests", "ranking": [{"offer": 2, "fit": 3, "why": "w"},
+                                                                          {"offer": 1, "fit": 0, "why": "w"}]})
+        self.cycle()
+        self.assertIn("offer #1 (forum entry 101, author user 7)", m.calls[1][1])
+        [disc] = self.state()["discovery"]
+        self.assertEqual((disc["chosen"], [r["entry_id"] for r in disc["ranking"]]), (102, [102, 101]))
+        self.assertEqual(disc["model_answer"], {"chosen_offer": 2, "ranked_offers": 2})
+        self.assertEqual(self.posted()[-1][0], 102)
 
     def test_chosen_id_outside_the_candidates_is_refused(self):
         self.two_offers()
@@ -246,7 +270,7 @@ class LaterCycleTests(Hw4TestCase):
         self.assertEqual(st["discovery"][-1]["reason"], "deadline passed")
         m = self.model(rank(101, (101, 2)))
         self.cycle(now="2026-10-06T17:00:00Z")
-        self.assertEqual(re.findall(r"offer entry_id=(\d+)", m.calls[0][1]), ["101"])
+        self.assertEqual(offered(m.calls[0][1]), ["101"])
         st = self.state()
         self.assertEqual((st["request"]["provider_entry_id"], st["request"]["status"]), (101, "sent"))
         self.assertEqual(st["past_requests"][0]["status"], "timed_out")
@@ -317,7 +341,7 @@ class BudgetAndSafetyTests(Hw4TestCase):
         self.assertEqual(self.fake.posts(), [])             # the offer comes after classification
         m = self.model(rank(102, (101, 0), (102, 3)))      # nothing new: no classify call
         self.cycle(now="2026-10-05T16:00:00Z")
-        self.assertEqual(re.findall(r"offer entry_id=(\d+)", m.calls[0][1]), ["101", "102"])
+        self.assertEqual(offered(m.calls[0][1]), ["101", "102"])
         self.assertEqual([p[0] for p in self.posted()], [None, 102])
 
     def test_many_new_entries_are_classified_in_batches(self):
@@ -502,9 +526,9 @@ class ModelClientTests(unittest.TestCase):
             return 200, json.dumps({"content": [{"type": "text", "text": "{}"}], "stop_reason": "end_turn"}).encode()
 
         hw4.model._post = fake_post
-        hw4.model.complete("s", "u", schema=hw4.RANK_SCHEMA, env={"ANTHROPIC_API_KEY": "k" * 20})
+        hw4.model.complete("s", "u", schema=hw4.rank_schema(3), env={"ANTHROPIC_API_KEY": "k" * 20})
         self.assertEqual(seen["body"]["output_config"],
-                         {"effort": "low", "format": {"type": "json_schema", "schema": hw4.RANK_SCHEMA}})
+                         {"effort": "low", "format": {"type": "json_schema", "schema": hw4.rank_schema(3)}})
         hw4.model.complete("s", "u", env={"ANTHROPIC_API_KEY": "k" * 20})
         self.assertNotIn("format", seen["body"]["output_config"])
 
@@ -523,7 +547,7 @@ class ModelClientTests(unittest.TestCase):
                 for i, v in enumerate(node):
                     walk(v, "%s/%d" % (path, i))
         walk(hw4.CLASSIFY_SCHEMA, "classify")
-        walk(hw4.RANK_SCHEMA, "rank")
+        walk(hw4.rank_schema(25), "rank")
         json.dumps(hw4.CLASSIFY_SCHEMA)
 
     def test_thinking_only_answer_cut_at_max_tokens_is_an_error(self):
