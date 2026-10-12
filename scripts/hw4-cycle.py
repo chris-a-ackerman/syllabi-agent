@@ -16,7 +16,9 @@ One cycle:
     2. New top-level entries by others go into offers_seen (id, author, excerpt <= 300 chars).
     3. One model call classifies the new entries (untrusted text, capped and delimited).
     4. At most 2 `forum post` calls, in order: (a) the service offer if not posted yet;
-       (b) deliver one job (HW4-3); (c) handle a received result (HW4-4); (d) no open request ->
+       (b) do one job (HW4-3: oldest first; a request in the offer thread is fetched with
+       `forum entry`, validated, extracted, checked and rendered by workspace/hw4/services/
+       syllabus_calendar.py, then delivered or declined as a reply to it); (c) handle a received result (HW4-4); (d) no open request ->
        a second model call ranks the offers against the need and the request goes to the chosen
        one; (e) a sent request past its deadline -> timed_out, the provider is not asked again.
     5. forum skip when nothing was posted, so forum.jsonl shows every cycle.
@@ -44,12 +46,14 @@ import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HW4_DIR = os.path.join(REPO, "workspace", "hw4")
-for _p in (os.path.join(REPO, "workspace", "skills", "forum", "scripts"), HW4_DIR):
+for _p in (os.path.join(REPO, "workspace", "skills", "forum", "scripts"), HW4_DIR,
+           os.path.join(HW4_DIR, "services")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
 import forum  # noqa: E402
 import model  # noqa: E402
+import syllabus_calendar as service  # noqa: E402
 
 try:
     from zoneinfo import ZoneInfo
@@ -70,6 +74,7 @@ KINDS = ("offer", "request_to_me", "result_for_me", "decline_for_me", "question_
 OPEN_REQUEST = ("sent", "result_received", "correction_requested")
 NEED = ("can write Python unit tests, or review/test code; stdlib Python; will return a file I can run")
 LOWERED_NEED = "any offer that mentions code, Python, tests or review"
+JOB_ATTEMPTS_MAX = 3            # model failures on one job before it is declined
 TEMPLATES = os.path.join(HW4_DIR, "templates")
 TASK_SOURCE = os.path.join(HW4_DIR, "task", "control_state.py")
 # Post errors that are a guard doing its job: the cycle stops posting but does not fail.
@@ -148,6 +153,16 @@ def _fmt_et(when):
         except Exception:  # no tz database on this machine
             pass
     return when.astimezone(dt.timezone.utc).strftime("%a %b %d, %Y, %H:%M UTC")
+
+
+def tip_amount(text):
+    """The first amount in a tip message ("$5", "5 credits", "tip: 3"), or None."""
+    m = re.search(r"\$\s*(\d+(?:\.\d+)?)|(\d+(?:\.\d+)?)\s*(?:credits?|points?|tokens?|coins?|dollars?|usd)\b|"
+                  r"\btip\w*\W{0,3}(\d+(?:\.\d+)?)", str(text or ""), re.I)
+    if not m:
+        return None
+    value = float(next(g for g in m.groups() if g is not None))
+    return int(value) if value.is_integer() else value
 
 
 def render(name, **values):
@@ -273,6 +288,7 @@ class Cycle:
         self.new_count = 0
         self.control = None
         self.counts = {}
+        self.text_max = forum._positive_int(env, "FORUM_TEXT_MAX", forum.TEXT_MAX)
 
     # -- forum.py
 
@@ -286,7 +302,7 @@ class Cycle:
             body = {"ok": False, "error": {"code": "INTERNAL", "message": "forum.py printed no JSON"}}
         return rc, body
 
-    def post(self, what, text, reply_to=None):
+    def post(self, what, text, reply_to=None, continuation=False):
         """One `forum post` call (or, dry run, a would-post). Returns forum.py's result or None."""
         if self.post_calls >= POST_BUDGET or self.stop_posting:
             self.actions.append({"action": what, "result": "deferred", "reason": "post budget used"})
@@ -300,7 +316,8 @@ class Cycle:
         fd, path = tempfile.mkstemp(prefix="%s-" % what, suffix=".txt", dir=self.work)
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(text)
-        argv = ["post", "--text-file", path] + (["--reply-to", str(reply_to)] if reply_to is not None else [])
+        argv = ["post", "--text-file", path] + (["--reply-to", str(reply_to)] if reply_to is not None else []) \
+            + (["--continuation"] if continuation else [])
         try:
             rc, body = self.forum(*argv)
         finally:
@@ -429,6 +446,8 @@ class Cycle:
                 candidate = "request_to_me"           # HW4-3 decides what it really is
             elif req_thread is not None and thread == req_thread and e.get("author") == provider_author:
                 candidate = "result_for_me"           # HW4-4 checks it
+            if candidate == "request_to_me":
+                self.note_job(e, c["kind"])
             if e.get("parent_id") is None and c["kind"] != "unclassified":
                 for o in self.state["offers_seen"]:
                     if _as_id(o.get("entry_id")) == eid:
@@ -439,6 +458,110 @@ class Cycle:
                     "entry_id": eid, "parent_id": _as_id(e.get("parent_id")), "thread_id": thread,
                     "author": _one_line(e.get("author"), 40), "kind": c["kind"], "candidate": candidate,
                     "received_at": forum.fmt(self.now), "handled": False})
+
+    # -- HW4-3: the provider side
+
+    def job_posts(self):
+        """Entry ids of this agent's replies to jobs (results, part 2s, declines)."""
+        return {_as_id(j.get(k)) for j in self.state["jobs"] for k in ("result_entry_id", "part2_entry_id")} - {None}
+
+    def note_job(self, e, kind):
+        """An entry in the offer thread: a tip goes on the job it is about; a reply to one of this
+        agent's own job replies (thanks, a follow-up) is not a new job; anything else is a job. Only
+        ids go into the state: the text is fetched again with `forum entry` when the job is done."""
+        st = self.state
+        eid, parent = _as_id(e["id"]), _as_id(e.get("parent_id"))
+        author = _one_line(e.get("author"), 40)
+        if kind == "tip":
+            job = next((j for j in reversed(st["jobs"]) if parent is not None and parent in
+                        (_as_id(j.get("result_entry_id")), _as_id(j.get("part2_entry_id")),
+                         _as_id(j.get("request_entry_id")))), None) or \
+                next((j for j in reversed(st["jobs"]) if j.get("author") == author), None)
+            if job is not None:
+                job.setdefault("tips", []).append({"entry_id": eid, "amount": tip_amount(e.get("text"))})
+            return
+        if parent in self.job_posts() or any(_as_id(j.get("request_entry_id")) == eid for j in st["jobs"]):
+            return
+        st["jobs"].append({"request_entry_id": eid, "author": author, "received_at": forum.fmt(self.now),
+                           "created_at": e.get("created_at"),
+                           "status": "pending", "result_entry_id": None, "attempts": 0, "checks": {}})
+
+    def do_job(self):
+        """(b) One job per cycle, oldest first: a pending "part 2", else a new request."""
+        pending = [j for j in self.state["jobs"] if j.get("status") == "pending"]
+        if not pending:
+            return
+        job = min(pending, key=lambda j: (str(j.get("received_at")), str(j.get("created_at") or ""),
+                                          _as_id(j.get("request_entry_id")) or 0))
+        if self.post_calls >= POST_BUDGET or self.stop_posting:
+            self.actions.append({"action": "job", "result": "deferred", "reason": "post budget used"})
+            return
+        if job.get("part2_text"):
+            body = self.post("calendar_part2", job["part2_text"], reply_to=job["result_entry_id"], continuation=True)
+            if body and body.get("ok") and not body.get("dry_run"):
+                job.update({"status": "delivered", "part2_entry_id": body.get("entry_id"),
+                            "delivered_at": forum.fmt(self.now)})
+                job.pop("part2_text", None)
+                self.save()
+            return
+        rid = _as_id(job.get("request_entry_id"))
+        rc, got = self.forum("entry", "--id", str(rid))
+        if not got.get("ok"):
+            code = (got.get("error") or {}).get("code") or "INTERNAL"
+            if code == "FORUM_BAD_TARGET":            # the request was deleted: nothing to answer
+                job.update({"status": "declined", "closed": "request_deleted", "closed_at": forum.fmt(self.now)})
+                self.actions.append({"action": "job", "result": "closed", "reply_to": rid})
+                self.save()
+                return
+            raise CycleError(code, "forum entry %s failed: %s" % (rid, code))
+        entry = got.get("entry") or {}
+        if job.get("attempts", 0) >= JOB_ATTEMPTS_MAX:
+            outcome = {"kind": "decline", "code": "attempts", "checks": job.get("checks") or {},
+                       "text": service.DECLINE_FAILED.format(n=job.get("attempts"))}
+        else:
+            job["attempts"] = job.get("attempts", 0) + 1
+            self.save()        # a model failure below still counts the attempt
+            outcome = service.handle(
+                entry.get("text") or "", truncated=bool(entry.get("truncated")),
+                ask=lambda system, user, **kw: ask_model(system, user, **kw),
+                today=self.now.date(), now=self.now, text_max=self.text_max)
+        job["checks"] = outcome.get("checks") or {}
+        if outcome["kind"] == "decline":
+            job["decline_code"] = outcome["code"]
+            texts = [outcome["text"]]
+        else:
+            job.update({"year": outcome.get("year"), "year_source": outcome.get("year_source")})
+            texts = outcome["parts"]
+            try:                  # the calendar must still parse after the trip through Canvas
+                for t in texts:
+                    if "BEGIN:VCALENDAR" in t:
+                        service.readback_ok(t, forum.html_to_text, forum.render_message)
+            except service.IcsError as e:
+                raise CycleError("HW4_ICS", "job %s: the calendar does not parse after a read-back (%s); "
+                                 "not posting it" % (rid, e))
+        texts = [forum.scrub(t, self.secrets) for t in texts]
+        what = "deliver" if outcome["kind"] == "deliver" else "decline"
+        body = self.post(what, texts[0], reply_to=rid)
+        if body is None or body.get("dry_run"):
+            if body is not None and len(texts) > 1:
+                self.would_post.append({"what": "calendar_part2", "reply_to": None, "next_cycle": True,
+                                        "chars": len(texts[1].strip()), "text": texts[1]})
+            return
+        if body.get("ok"):
+            job.update({"result_entry_id": body.get("entry_id"), "result_url": body.get("html_url"),
+                        "status": "declined" if what == "decline" else "delivered",
+                        ("declined_at" if what == "decline" else "delivered_at"): forum.fmt(self.now)})
+            if len(texts) > 1:
+                job.update({"status": "pending", "part2_text": texts[1]})
+            self.save()
+            return
+        code = (body.get("error") or {}).get("code")
+        if code == "FORUM_ALREADY_REPLIED":
+            job.update({"status": "declined", "closed": "already_replied", "closed_at": forum.fmt(self.now)})
+            self.save()
+        elif code == "FORUM_BAD_TARGET":
+            job.update({"status": "declined", "closed": "request_deleted", "closed_at": forum.fmt(self.now)})
+            self.save()
 
     def act(self):
         st = self.state
@@ -452,7 +575,9 @@ class Cycle:
                     st["offer"] = {"entry_id": body["entry_id"], "html_url": body.get("html_url"),
                                    "posted_at": forum.fmt(self.now), "duplicate": bool(body.get("duplicate"))}
                     self.save()
-        # (b) HW4-3: deliver one pending job.  (c) HW4-4: handle a received result.
+        # (b) HW4-3: one job, oldest first.
+        self.do_job()
+        # (c) HW4-4: handle a received result.
         # (d) choose a provider and send the request
         req = st["request"]
         if (req is None or req.get("status") not in OPEN_REQUEST + ("accepted",)) and \
@@ -571,13 +696,15 @@ class Cycle:
 
     def summary(self):
         done = [a for a in self.actions if a.get("result") in ("posted", "duplicate", "dry_run", "timed_out",
-                                                                   "no_fit", "no_candidates", "error")]
+                                                                   "no_fit", "no_candidates", "error", "closed")]
         parts = []
         for a in done:
             if a["result"] == "error":
                 parts.append("%s refused (%s)" % (a["action"], a.get("error_code")))
             elif a["action"] == "discovery":
                 parts.append("no fitting offer" if a["result"] == "no_fit" else "no offers to choose from")
+            elif a["action"] == "job":
+                parts.append("request %s closed (deleted or already answered)" % a.get("reply_to"))
             elif a["result"] == "timed_out":
                 parts.append("request to entry %s timed out" % a.get("provider"))
             else:
@@ -676,6 +803,7 @@ def cmd_status(env, now):
     return 0, {"ok": True, "command": "status", "offer": st["offer"], "request": req,
                "offers_seen": len(st["offers_seen"]), "tried_providers": st["tried_providers"],
                "past_requests": len(st["past_requests"]), "jobs": len(st["jobs"]),
+               "jobs_pending": sum(1 for j in st["jobs"] if j.get("status") == "pending"),
                "inbox_unhandled": sum(1 for x in st["inbox"] if not x.get("handled")),
                "discovery": st["discovery"][-3:], "last_cycle_at": st["last_cycle_at"]}
 

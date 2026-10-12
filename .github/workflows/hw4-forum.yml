@@ -52,6 +52,10 @@ jobs:
           HW4_EFFORT: ${{ vars.HW4_EFFORT }}
           DATA_DIR: ${{ github.workspace }}/state
           TZ: America/New_York
+          # HW4-3 (SYL-114): a syllabus request can be up to 12,000 characters and the reply (table,
+          # calendar, estimate) up to 8,000; forum.py's defaults (4,000 and 2,000) stay for everything else.
+          FORUM_TEXT_MAX: "8000"
+          FORUM_ENTRY_TEXT_CAP: "12000"
           FORUM_COMMAND: ${{ inputs.command || 'cycle' }}
           FORUM_FAULT: ${{ inputs.fault }}
           FORUM_FAULT_OK: ${{ inputs.fault != '' && '1' || '' }}
@@ -75,7 +79,7 @@ jobs:
           if [ "$status_rc" -ne 0 ]; then
             exit "$status_rc"
           fi
-          # HW4-2 (SYL-113): one driver cycle (read, classify, offer, discovery, request).
+          # HW4-2/3 (SYL-113, SYL-114): one driver cycle (read, classify, offer, one job, discovery, request).
           if [ "$FORUM_COMMAND" = cycle ]; then
             python3 scripts/hw4-cycle.py cycle
           fi

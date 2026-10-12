@@ -458,8 +458,9 @@ Canvas endpoints, base `$CANVAS_BASE_URL/api/v1/courses/{course}/discussion_topi
 
 | Command | Inputs | Output (`ok: true` plus) |
 | --- | --- | --- |
-| `read` | `--limit N` (default 50) | `note, control: RUNNING\|PAUSED\|UNKNOWN, control_error?, new: [{id, parent_id, thread_id, author: "user <id>", created_at, text (≤ 4,000), truncated?, context? (≤ 1,000, replies only)}], threads, seen_total, own_posts, pending, remaining?`. `new` = not in memory, not the agent's own user id, not deleted, oldest first. Returned ids are stored as seen. |
-| `post` | `--text-file` (under `$DATA_DIR/work/forum/`), `--reply-to <entry_id>?` | `entry_id, html_url, verified: true, parent_id, attempts, reconciled?`. A duplicate is `duplicate: true, code: FORUM_DUPLICATE, entry_id, html_url` with exit 0, and nothing is posted |
+| `read` | `--limit N` (default 50) | `note, control: RUNNING\|PAUSED\|UNKNOWN, control_error?, new: [{id, parent_id, thread_id, author: "user <id>", created_at, text (≤ 4,000, or `FORUM_ENTRY_TEXT_CAP`), truncated?, context? (≤ 1,000, replies only)}], threads, seen_total, own_posts, pending, remaining?`. `new` = not in memory, not the agent's own user id, not deleted, oldest first. Returned ids are stored as seen. |
+| `entry` | `--id <entry_id>` | `note, entry: {id, parent_id, thread_id, author, created_at, text, truncated?}` for one live entry (HW4-3). Read-only: nothing is stored as seen, nothing logged. |
+| `post` | `--text-file` (under `$DATA_DIR/work/forum/`), `--reply-to <entry_id>?`, `--continuation?` | `entry_id, html_url, verified: true, parent_id, attempts, reconciled?`. A duplicate is `duplicate: true, code: FORUM_DUPLICATE, entry_id, html_url` with exit 0, and nothing is posted |
 | `skip` | `--reason` | `decision: "skip", reason, ts` |
 | `status` | | `control, control_checked, halted, halt?, self_user_id, seen_total, own_posts, pending, abandoned, posts_last_hour, attempts_last_hour, rate_limit, consecutive_failures, max_failures, last_cycle_at` (read-only; no Canvas call while halted) |
 | `report` | `--since ISO?` | `markdown` (cycles table: time, new entries read, decision, reason, result; own posts with `html_url`; authors only as `user <id>`), `cycles, posts` |
@@ -474,12 +475,13 @@ Global flags: `--now ISO` pins the clock (tests and evals), and `-v` logs `<meth
    of the HTML-stripped description must be `COURSE-TEAM CONTROL: RUNNING` (case-insensitive,
    surrounding whitespace ignored). `…: PAUSED` → `FORUM_PAUSED`. Anything else, including a missing
    line or a failed GET, → `FORUM_CONTROL_UNKNOWN`. A `CANVAS_401` is reported as itself and halts.
-4. **Text**: 1–2,000 characters after trimming. `FORUM_TEXT` if it contains the value (8+
+4. **Text**: 1–2,000 characters after trimming (`FORUM_TEXT_MAX` sets another limit; HW4 uses 8,000). `FORUM_TEXT` if it contains the value (8+
    characters) of any env var whose name contains `TOKEN`, `KEY`, `SECRET`, `PASSWORD` or
    `COOKIE`, or the text `syl_agent_` (any case). The file must be under `$DATA_DIR/work/forum/`
    after resolving symlinks (`USAGE`).
 5. **Target**: `--reply-to` must be a live entry in the current forum view and not the agent's own
-   → `FORUM_BAD_TARGET`.
+   → `FORUM_BAD_TARGET`. With `--continuation` (HW4-3's "calendar, part 2") it must instead be one
+   of the agent's own replies (never a thread it started).
 6. **Duplicates**: same parent + same normalized-text hash in `posts`, or among the agent's own
    entries in the view → `FORUM_DUPLICATE` (exit 0). A second reply to the same parent (memory or
    view) → `FORUM_ALREADY_REPLIED`.

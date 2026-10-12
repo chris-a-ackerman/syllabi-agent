@@ -44,8 +44,9 @@ and `--now <ISO>` pins the clock (evals and tests only).
 
 | Command | Returns (`ok: true` plus) |
 | --- | --- |
-| `forum read [--limit N]` | `note, control: RUNNING\|PAUSED\|UNKNOWN, new: [{id, parent_id, thread_id, author, created_at, text, context?, truncated?}], threads, seen_total, own_posts, pending, remaining?`. `new` = entries not seen before, not yours, not deleted, oldest first, at most `--limit` (default 50; the rest stay unseen for the next read). `text` is HTML-stripped and capped at 4,000 characters. A reply's `context` is the start (1,000 characters) of its thread's first entry. `author` is always `user <id>`, never a name. |
-| `forum post --text-file <path> [--reply-to <entry_id>]` | `entry_id, html_url, verified: true, parent_id, attempts, reconciled?`. Plain text, 1–2,000 characters, in a file under `/data/work/forum/`. Without `--reply-to` it starts a new thread. |
+| `forum read [--limit N]` | `note, control: RUNNING\|PAUSED\|UNKNOWN, new: [{id, parent_id, thread_id, author, created_at, text, context?, truncated?}], threads, seen_total, own_posts, pending, remaining?`. `new` = entries not seen before, not yours, not deleted, oldest first, at most `--limit` (default 50; the rest stay unseen for the next read). `text` is HTML-stripped and capped at 4,000 characters (`FORUM_ENTRY_TEXT_CAP` overrides it). A reply's `context` is the start (1,000 characters) of its thread's first entry. `author` is always `user <id>`, never a name. |
+| `forum entry --id <entry_id>` | `note, entry: {id, parent_id, thread_id, author, created_at, text, truncated?}`. One live entry, same caps as `read`. Read-only: nothing is marked as seen and nothing is logged. |
+| `forum post --text-file <path> [--reply-to <entry_id> [--continuation]]` | `entry_id, html_url, verified: true, parent_id, attempts, reconciled?`. Plain text, 1–2,000 characters (`FORUM_TEXT_MAX` overrides it), in a file under `/data/work/forum/`. Without `--reply-to` it starts a new thread. `--continuation` allows a reply to one of your own *replies* (a "part 2"), and only that. |
 | (duplicate) | `duplicate: true, code: "FORUM_DUPLICATE", entry_id, html_url`, exit 0. The same text is already posted to the same parent, so nothing was posted. Treat it as done. |
 | `forum skip --reason "<text>"` | `decision: "skip", reason, ts`. Records a deliberate no-post cycle. |
 | `forum status` | `control, control_checked, halted, halt?, self_user_id, seen_total, own_posts, pending, abandoned, posts_last_hour, attempts_last_hour, rate_limit, consecutive_failures, max_failures, last_cycle_at`. Read-only. |
@@ -71,8 +72,8 @@ and `--now <ISO>` pins the clock (evals and tests only).
 | `FORUM_HALTED` | `/data/memory/forum-halt` exists (3 failures in a row, or a rejected token) | stop all forum work. Only a human deletes the file; tell Chris once. |
 | `FORUM_PAUSED` | the topic's first line is `COURSE-TEAM CONTROL: PAUSED` | skip this cycle. Not a failure. |
 | `FORUM_CONTROL_UNKNOWN` | the control line is missing, garbled, or the topic GET failed | skip this cycle. The tool fails closed. |
-| `FORUM_TEXT` | empty, over 2,000 characters, contains a secret env value or `syl_agent_` | rewrite it without that, next cycle |
-| `FORUM_BAD_TARGET` | `--reply-to` is not a live entry in this topic, or it is your own entry | pick a real entry from `read` |
+| `FORUM_TEXT` | empty, over 2,000 characters (or `FORUM_TEXT_MAX`), contains a secret env value or `syl_agent_` | rewrite it without that, next cycle |
+| `FORUM_BAD_TARGET` | `--reply-to` (or `entry --id`) is not a live entry in this topic, or it is your own entry (with `--continuation`: not your own reply) | pick a real entry from `read` |
 | `FORUM_ALREADY_REPLIED` | you already replied to that entry | do not reply again. Not a failure. |
 | `FORUM_RATE` | 3 write attempts (retries and failed POSTs included) in the trailing 60 minutes (memory or the forum, whichever shows more) | skip. Not a failure. |
 | `FORUM_PENDING` | an earlier post may still be saving (under 2 minutes old, not visible yet) | skip. The next cycle reconciles it. |
