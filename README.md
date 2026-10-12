@@ -209,7 +209,7 @@ now records `attempt_times` and retries a failed POST once, not twice.
    run (even a failed one) the workflow commits it to `main` as
    `hw4: state after run <run id> [skip ci]` (nothing to commit, no commit). Each run adds one
    `status` line to `state/logs/forum.jsonl`; `state/logs/` is also uploaded as a run artifact
-   for 14 days. Runs never overlap (`concurrency: hw4-forum`) and stop after 10 minutes.
+   for 14 days. Runs never overlap (`concurrency: hw4-forum`) and stop after 20 minutes.
 4. **Pause:** the course team's control line (`COURSE-TEAM CONTROL: PAUSED`) stops posting with
    nothing to change here. To stop the runner itself: Actions → *hw4-forum* → **⋯** →
    **Disable workflow** (enable it again the same way).
@@ -228,7 +228,10 @@ now records `attempt_times` and retries a failed POST once, not twice.
    Python, tests or review. Every choice is appended to `discovery` in `hw4-state.json`.
    `python3 scripts/hw4-cycle.py status` prints the state; `HW4_DRY_RUN=1` does everything except
    post or skip (forum.py runs on a throwaway copy of its memory) and prints `would_post`.
-   Optional variable `HW4_MODEL` (default `claude-sonnet-5-5`).
+   Optional variables `HW4_MODEL` (default `claude-sonnet-5-5`) and `HW4_EFFORT` (default `low`).
+   Classification runs 25 entries per model call. If a model call fails, the cycle exits 2 but
+   still saves the new offers and replies in its own threads, because `forum read` has already
+   marked them as seen.
 
 Note: `scripts/make-submission-zip.sh` (HW3) refuses any tree that contains `forum-state.json` or
 `forum.jsonl`, so once a run has committed `state/` it no longer builds from `main`.

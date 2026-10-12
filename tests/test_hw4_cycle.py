@@ -273,18 +273,48 @@ class BudgetAndSafetyTests(Hw4TestCase):
             src = fh.read()
         self.assertEqual(src.count('self.forum(*argv)'), 1)   # every post goes through Cycle.post
 
-    def test_model_exception_exits_2_and_leaves_the_state_file_unchanged(self):
+    def test_model_exception_exits_2_and_keeps_only_mechanical_facts(self):
         self.model()
         self.cycle()                                      # offer posted, state written
-        with open(self.state_path(), "rb") as fh:
-            before = fh.read()
+        before = self.state()
+        offer = before["offer"]["entry_id"]
         self.two_offers()
+        self.fake.add(103, OTHER_A, "please brief this", parent_id=offer)
         self.model(hw4.model.ModelError("HTTP 529"))
         body = self.cycle(now="2026-10-05T16:00:00Z", expect=2)
         self.assertEqual((body["decision"], body["reason"]), ("error", "model"))
-        with open(self.state_path(), "rb") as fh:
-            self.assertEqual(fh.read(), before)
+        after = self.state()
+        # forum.py has marked 101-103 as seen, so what needs no model is kept ...
+        self.assertEqual([o["entry_id"] for o in after["offers_seen"]], [101, 102])
+        self.assertNotIn("kind", after["offers_seen"][0])
+        [item] = after["inbox"]
+        self.assertEqual((item["entry_id"], item["kind"], item["candidate"]), (103, "unclassified", "request_to_me"))
+        # ... and no decision is made or recorded
+        for key in ("offer", "request", "discovery", "tried_providers", "past_requests"):
+            self.assertEqual(after[key], before[key], key)
+        self.assertEqual(len(self.fake.posts()), 1)
         self.assertEqual(self.hw4_log()[-1]["reason"], "model")
+
+    def test_offers_saved_after_a_model_failure_are_ranked_next_cycle(self):
+        self.two_offers()
+        self.model(hw4.model.ModelError("max_tokens"))
+        self.cycle(expect=2)
+        self.assertEqual(self.fake.posts(), [])             # the offer comes after classification
+        m = self.model(rank(102, (101, 0), (102, 3)))      # nothing new: no classify call
+        self.cycle(now="2026-10-05T16:00:00Z")
+        self.assertEqual(re.findall(r"offer entry_id=(\d+)", m.calls[0][1]), ["101", "102"])
+        self.assertEqual([p[0] for p in self.posted()], [None, 102])
+
+    def test_many_new_entries_are_classified_in_batches(self):
+        for i in range(60):
+            self.fake.add(200 + i, OTHER_A, "offer number %d" % i)
+        answers = [classify(*[(200 + i, "offer") for i in range(start, min(start + 25, 60))])
+                   for start in range(0, 60, 25)]
+        m = self.model(*answers, rank(None))
+        body = self.cycle()
+        self.assertEqual(len(m.calls), 4)                  # 25 + 25 + 10, then the ranking
+        self.assertEqual(body["classified"], {"offer": 60})
+        self.assertEqual([len(re.findall(r"^entry id=", c[1], re.M)) for c in m.calls[:3]], [25, 25, 10])
 
     def test_dry_run_posts_nothing_and_prints_the_offer_and_request(self):
         self.two_offers()
@@ -428,6 +458,43 @@ class ModelClientTests(unittest.TestCase):
         self.assertEqual(seen["body"]["model"], "claude-sonnet-5-5")
         self.assertEqual(seen["body"]["system"], "sys")
         self.assertEqual(seen["body"]["messages"], [{"role": "user", "content": "usr"}])
+
+    def test_low_effort_and_refusal_fallback_are_requested(self):
+        seen = {}
+
+        def fake_post(url, body, headers, timeout):
+            seen.update(body=json.loads(body), headers=headers)
+            return 200, json.dumps({"content": [{"type": "thinking", "thinking": ""},
+                                                {"type": "text", "text": "[]"}], "stop_reason": "end_turn"}).encode()
+
+        hw4.model._post = fake_post
+        self.assertEqual(hw4.model.complete("s", "u", env={"ANTHROPIC_API_KEY": "k" * 20}), "[]")
+        self.assertEqual(seen["body"]["output_config"], {"effort": "low"})
+        self.assertEqual(seen["body"]["max_tokens"], 16_000)
+        self.assertEqual(seen["body"]["fallbacks"], "default")
+        self.assertEqual(seen["headers"]["anthropic-beta"], "server-side-fallback-2026-07-01")
+        hw4.model.complete("s", "u", env={"ANTHROPIC_API_KEY": "k" * 20, "HW4_MODEL": "claude-haiku-5-5",
+                                          "HW4_EFFORT": "medium"})
+        self.assertNotIn("fallbacks", seen["body"])
+        self.assertNotIn("anthropic-beta", seen["headers"])
+        self.assertEqual(seen["body"]["output_config"], {"effort": "medium"})
+
+    def test_thinking_only_answer_cut_at_max_tokens_is_an_error(self):
+        # The first live run: Sonnet 5.5 thinks by default and used the whole budget on thinking.
+        hw4.model._post = lambda *a: (200, json.dumps({"content": [{"type": "thinking", "thinking": ""}],
+                                                       "stop_reason": "max_tokens"}).encode())
+        with self.assertRaisesRegex(hw4.model.ModelError, "max_tokens"):
+            hw4.model.complete("s", "u", env={"ANTHROPIC_API_KEY": "k" * 20})
+        hw4.model._post = lambda *a: (200, json.dumps({"content": [], "stop_reason": "refusal",
+                                                       "stop_details": {"category": "cyber"}}).encode())
+        with self.assertRaisesRegex(hw4.model.ModelError, "refusal.*cyber"):
+            hw4.model.complete("s", "u", env={"ANTHROPIC_API_KEY": "k" * 20})
+
+    def test_http_error_names_the_api_error(self):
+        hw4.model._post = lambda *a: (400, json.dumps({"type": "error", "error": {
+            "type": "invalid_request_error", "message": "output_config.effort: bad value"}}).encode())
+        with self.assertRaisesRegex(hw4.model.ModelError, "HTTP 400: invalid_request_error: output_config"):
+            hw4.model.complete("s", "u", env={"ANTHROPIC_API_KEY": "k" * 20})
 
     def test_errors_raise_model_error(self):
         hw4.model._post = lambda *a: (529, b'{"error": "overloaded"}')
