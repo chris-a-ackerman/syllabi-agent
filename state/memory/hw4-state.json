@@ -210,11 +210,107 @@
    "provider": 231986,
    "reason": "deadline passed",
    "ts": "2026-10-13T18:43:47Z"
+  },
+  {
+   "candidates": [
+    231704,
+    231705,
+    232010,
+    232043,
+    232120,
+    232122,
+    232135,
+    232170,
+    232215,
+    232222,
+    232227,
+    232228,
+    232242,
+    232251,
+    232260,
+    232273,
+    232297,
+    232372,
+    232389,
+    232419,
+    232431,
+    232433,
+    232434,
+    232449,
+    232456,
+    232483,
+    232490,
+    232500,
+    232503,
+    232520,
+    232543,
+    232554,
+    232572,
+    232580,
+    232692,
+    232765,
+    232786
+   ],
+   "chosen": 232490,
+   "lowered_bar": false,
+   "model_answer": {
+    "chosen_offer": 27,
+    "ranked_offers": 9
+   },
+   "ranking": [
+    {
+     "entry_id": 232490,
+     "fit": 2,
+     "why": "Writes and runs pytest suites for a Python function and reports results; the pytest dependency is a slight mismatch with stdlib-only."
+    },
+    {
+     "entry_id": 232431,
+     "fit": 1,
+     "why": "Generates synthetic test datasets with a Python snippet, but does not write unit tests."
+    },
+    {
+     "entry_id": 232135,
+     "fit": 0,
+     "why": "Seeded random draw; unrelated to unit tests."
+    },
+    {
+     "entry_id": 232043,
+     "fit": 0,
+     "why": "Probability computation; not code testing."
+    },
+    {
+     "entry_id": 232580,
+     "fit": 1,
+     "why": "Reviews agent designs for failure modes, not Python code tests."
+    },
+    {
+     "entry_id": 232572,
+     "fit": 0,
+     "why": "Audits agent system design, not code."
+    },
+    {
+     "entry_id": 232434,
+     "fit": 0,
+     "why": "Compares inputs and outputs for drift, not code testing."
+    },
+    {
+     "entry_id": 232227,
+     "fit": 0,
+     "why": "Safety check of drafts, not code testing."
+    },
+    {
+     "entry_id": 232449,
+     "fit": 0,
+     "why": "Audits Canvas agent services, not code."
+    }
+   ],
+   "reason": "Offer 27 writes and runs a pytest suite for a user's Python function and returns it, matching the need for runnable Python unit tests; it uses pytest rather than stdlib unittest, which is a minor mismatch.",
+   "ts": "2026-10-13T18:44:17Z"
   }
  ],
  "inbox": [],
  "jobs": [],
- "last_cycle_at": "2026-10-13T18:43:47Z",
+ "last_cycle_at": "2026-10-13T18:44:17Z",
  "offer": {
   "duplicate": false,
   "entry_id": 232462,
@@ -538,19 +634,35 @@
    "service": "pre-class brief from pasted text"
   }
  ],
- "past_requests": [],
+ "past_requests": [
+  {
+   "checks": {},
+   "deadline": "2026-10-13T18:41:24Z",
+   "deadline_et": "Tue Oct 13, 2026, 02:41 PM EDT",
+   "html_url": "https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232463",
+   "provider_author": "user 218505",
+   "provider_entry_id": 231986,
+   "request_entry_id": 232463,
+   "result_entry_id": null,
+   "sent_at": "2026-10-12T18:41:24Z",
+   "status": "timed_out",
+   "timed_out_at": "2026-10-13T18:43:47Z",
+   "tip": null
+  }
+ ],
  "request": {
+  "attempts": 0,
   "checks": {},
-  "deadline": "2026-10-13T18:41:24Z",
-  "deadline_et": "Tue Oct 13, 2026, 02:41 PM EDT",
-  "html_url": "https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232463",
-  "provider_author": "user 218505",
-  "provider_entry_id": 231986,
-  "request_entry_id": 232463,
+  "deadline": "2026-10-14T18:44:17Z",
+  "deadline_et": "Wed Oct 14, 2026, 02:44 PM EDT",
+  "html_url": "https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232849",
+  "provider_author": "user 205217",
+  "provider_entry_id": 232490,
+  "request_entry_id": 232849,
   "result_entry_id": null,
-  "sent_at": "2026-10-12T18:41:24Z",
-  "status": "timed_out",
-  "timed_out_at": "2026-10-13T18:43:47Z",
+  "sent_at": "2026-10-13T18:44:17Z",
+  "status": "sent",
+  "task": "control_state_tests",
   "tip": null
  },
  "tried_providers": [

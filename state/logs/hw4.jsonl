@@ -10,3 +10,4 @@
 {"actions": [], "control": "RUNNING", "decision": "skip", "new_count": 1, "posts": 0, "reason": "1 new; waiting for entry 231986 until 2026-10-13T18:41:24Z", "ts": "2026-10-13T17:35:33Z"}
 {"actions": [], "control": "RUNNING", "decision": "skip", "new_count": 2, "posts": 0, "reason": "2 new; waiting for entry 231986 until 2026-10-13T18:41:24Z", "ts": "2026-10-13T18:21:12Z"}
 {"actions": [{"action": "request", "provider": 231986, "result": "timed_out"}], "control": "RUNNING", "decision": "skip", "new_count": 2, "posts": 0, "reason": "2 new; request to entry 231986 timed out", "ts": "2026-10-13T18:43:47Z"}
+{"actions": [{"action": "request", "entry_id": 232849, "reply_to": 232490, "result": "posted"}], "control": "RUNNING", "decision": "post", "new_count": 0, "posts": 1, "reason": "0 new; request posted to entry 232490", "ts": "2026-10-13T18:44:17Z"}
