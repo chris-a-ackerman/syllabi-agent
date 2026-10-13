@@ -4,9 +4,8 @@
     python3 scripts/hw4-writeup.py [--state DIR] [--out DIR]
 
 Reads state/memory/hw4-state.json, state/memory/forum-state.json and state/logs/hw4.jsonl (DIR
-defaults to $DATA_DIR, then ./state) and writes <out>/hw4-writeup.md and <out>/hw4-writeup.html
-(out defaults to ./docs). The workflow prints the HTML to docs/hw4-writeup.pdf with headless
-Chrome and commits both, so whatever the exchange's outcome (accepted result, open request, or
+defaults to $DATA_DIR, then ./state) and writes <out>/hw4-writeup.md (out defaults to ./docs).
+The workflow commits it with the state, so whatever the exchange's outcome (accepted result, open request, or
 only documented attempts) the submission is ready to download from main.
 
 No model call and no network: every sentence below is either fixed text about how the agent is
@@ -15,7 +14,6 @@ show. Standard library only.
 """
 import argparse
 import datetime as dt
-import html
 import json
 import os
 import re
@@ -98,8 +96,7 @@ def link(eid, label=None):
 
 
 class Doc:
-    """Blocks rendered to both Markdown and HTML. Inline text uses three Markdown forms only:
-    [text](url), `code` and **bold**."""
+    """Blocks rendered to Markdown."""
 
     def __init__(self):
         self.blocks = []
@@ -132,45 +129,6 @@ class Doc:
                 rows += ["| " + " | ".join(cell(c) for c in r) + " |" for r in b[2]]
                 out.append("\n".join(rows))
         return "\n\n".join(out) + "\n"
-
-    def html(self):
-        body = []
-        for b in self.blocks:
-            if b[0] == "h":
-                body.append("<h%d>%s</h%d>" % (b[1], inline(b[2]), b[1]))
-            elif b[0] == "p":
-                body.append("<p>%s</p>" % inline(b[1]))
-            elif b[0] == "ul":
-                body.append("<ul>%s</ul>" % "".join("<li>%s</li>" % inline(i) for i in b[1]))
-            else:
-                head = "".join("<th>%s</th>" % inline(str(c)) for c in b[1])
-                rows = "".join("<tr>%s</tr>" % "".join("<td>%s</td>" % inline(str(c)) for c in r) for r in b[2])
-                body.append("<table><thead><tr>%s</tr></thead><tbody>%s</tbody></table>" % (head, rows))
-        return HTML_PAGE % (html.escape(TITLE), "\n".join(body))
-
-
-def inline(text):
-    s = html.escape(text, quote=False)
-    s = re.sub(r"`([^`]+)`", r"<code>\1</code>", s)
-    s = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", s)
-    return re.sub(r"\[([^\]]+)\]\(([^)\s]+)\)",
-                  lambda m: '<a href="%s">%s</a>' % (m.group(2).replace('"', "%22"), m.group(1)), s)
-
-
-HTML_PAGE = """<!doctype html>
-<html><head><meta charset="utf-8"><title>%s</title>
-<style>
-@page { size: Letter; margin: 0.6in 0.7in; }
-body { font: 10pt/1.4 -apple-system, "Helvetica Neue", Arial, sans-serif; color: #111; }
-h1 { font-size: 15pt; margin: 0 0 4px; } h2 { font-size: 11.5pt; margin: 14px 0 4px; }
-p, ul { margin: 4px 0; } ul { padding-left: 18px; }
-table { border-collapse: collapse; width: 100%%; margin: 6px 0; font-size: 8.5pt; }
-th, td { border: 1px solid #bbb; padding: 2px 5px; text-align: left; vertical-align: top; }
-th { background: #eee; } code { font-size: 8.5pt; } a { color: #0645ad; }
-</style></head><body>
-%s
-</body></html>
-"""
 
 
 # --------------------------------------------------------------------------- the write-up
@@ -395,9 +353,8 @@ def main(argv=None):
     model = (os.environ.get("HW4_MODEL") or "claude-sonnet-5-5").strip()
     doc = build(st, fs, log, model, os.path.exists(os.path.join(a.state, "memory", "forum-halt")))
     os.makedirs(a.out, exist_ok=True)
-    for name, text in (("hw4-writeup.md", doc.markdown()), ("hw4-writeup.html", doc.html())):
-        with open(os.path.join(a.out, name), "w", encoding="utf-8") as fh:
-            fh.write(text)
+    with open(os.path.join(a.out, "hw4-writeup.md"), "w", encoding="utf-8") as fh:
+        fh.write(doc.markdown())
     print(json.dumps({"ok": True, "out": a.out}))
     return 0
 

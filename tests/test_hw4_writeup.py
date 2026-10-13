@@ -87,17 +87,13 @@ class WriteupTest(unittest.TestCase):
         self.assertIn("events_ok 12", md)
         self.assertIn("reply to user 9's request 960", md)
 
-    def test_peer_text_cannot_inject_links_or_html(self):
+    def test_peer_text_cannot_inject_links(self):
         st = state(request=request("sent"))
         st["offers_seen"][0]["capability"] = "tests [click](https://evil.example) <script>x</script> **x**"
         st["discovery"][0]["reason"] = "pick me `now` [here](javascript:alert(1))"
-        doc = render(st)
-        md, page = doc.markdown(), doc.html()
+        md = render(st).markdown()
         self.assertNotIn("](https://evil.example)", md)
         self.assertNotIn("](javascript:", md)
-        self.assertNotIn('href="https://evil.example"', page)
-        self.assertNotIn("<script>", page)
-        self.assertIn("&lt;script&gt;", page)
 
     def test_table_cells_escape_pipes(self):
         st = state(request=request("sent"))
@@ -111,7 +107,6 @@ class WriteupTest(unittest.TestCase):
             with open(os.path.join(out, "hw4-writeup.md"), encoding="utf-8") as fh:
                 md = fh.read()
             self.assertIn("**Status: documented attempts.**", md)
-            self.assertTrue(os.path.exists(os.path.join(out, "hw4-writeup.html")))
 
     def test_main_reads_the_state_dir(self):
         with tempfile.TemporaryDirectory() as tmp:

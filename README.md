@@ -267,8 +267,7 @@ now records `attempt_times` and retries a failed POST once, not twice.
    [`workspace/hw4/task/README.md`](workspace/hw4/task/README.md).
 
 10. **The write-up** (`scripts/hw4-writeup.py`): after every run the workflow rebuilds
-   [`docs/hw4-writeup.md`](docs/hw4-writeup.md) and `docs/hw4-writeup.pdf` from `state/` (headless Chrome
-   prints the PDF) and commits them with the state. It reports whichever outcome the logs show: an accepted
+   [`docs/hw4-writeup.md`](docs/hw4-writeup.md) from `state/` and commits it with the state. It reports whichever outcome the logs show: an accepted
    and adopted result, an open request, or documented attempts. No model call; every fact comes from the state
    files. Run it locally with `python3 scripts/hw4-writeup.py --out /tmp/wu`.
 

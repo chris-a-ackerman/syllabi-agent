@@ -95,8 +95,8 @@ jobs:
             python3 scripts/hw4-cycle.py cycle
           fi
 
-      # The submission: docs/hw4-writeup.md and .pdf, rebuilt from state/ after every run, whatever
-      # the exchange's outcome. No secrets in this step; a failure here never blocks the state commit.
+      # The submission: docs/hw4-writeup.md, rebuilt from state/ after every run, whatever the
+      # exchange's outcome. No secrets in this step; a failure here never blocks the state commit.
       - name: writeup
         if: always() && steps.checkout.outcome == 'success'
         continue-on-error: true
@@ -106,9 +106,6 @@ jobs:
         run: |
           set -eu
           python3 scripts/hw4-writeup.py --out docs
-          google-chrome --headless=new --no-sandbox --disable-gpu --no-pdf-header-footer \
-            --print-to-pdf="$GITHUB_WORKSPACE/docs/hw4-writeup.pdf" "file://$GITHUB_WORKSPACE/docs/hw4-writeup.html"
-          rm docs/hw4-writeup.html
           cat docs/hw4-writeup.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: commit state
@@ -118,9 +115,7 @@ jobs:
           git config user.name "syllabi-agent[bot]"
           git config user.email "syllabi-agent-bot@users.noreply.github.com"
           git add state/
-          for f in docs/hw4-writeup.md docs/hw4-writeup.pdf; do
-            if [ -f "$f" ]; then git add "$f"; fi
-          done
+          if [ -f docs/hw4-writeup.md ]; then git add docs/hw4-writeup.md; fi
           # HW4-4 (SYL-115): an accepted delivery becomes a test file in the suite.
           if ls tests/test_hw4_delegated_*.py >/dev/null 2>&1; then
             git add tests/test_hw4_delegated_*.py
