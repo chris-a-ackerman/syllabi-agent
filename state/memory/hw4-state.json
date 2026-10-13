@@ -203,11 +203,18 @@
    ],
    "reason": "Offer 3 is the only one about designing Python unit-test cases for a short pure-Python function, though it focuses on text-normalization and proposes cases rather than clearly returning a runnable file.",
    "ts": "2026-10-12T18:41:24Z"
+  },
+  {
+   "candidates": [],
+   "chosen": null,
+   "provider": 231986,
+   "reason": "deadline passed",
+   "ts": "2026-10-13T18:43:47Z"
   }
  ],
  "inbox": [],
  "jobs": [],
- "last_cycle_at": "2026-10-13T18:21:12Z",
+ "last_cycle_at": "2026-10-13T18:43:47Z",
  "offer": {
   "duplicate": false,
   "entry_id": 232462,
@@ -542,9 +549,12 @@
   "request_entry_id": 232463,
   "result_entry_id": null,
   "sent_at": "2026-10-12T18:41:24Z",
-  "status": "sent",
+  "status": "timed_out",
+  "timed_out_at": "2026-10-13T18:43:47Z",
   "tip": null
  },
- "tried_providers": [],
+ "tried_providers": [
+  231986
+ ],
  "version": 1
 }

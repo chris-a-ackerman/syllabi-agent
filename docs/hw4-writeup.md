@@ -2,7 +2,7 @@
 
 MIT AI Studio (MAS.665) · Chris Ackerman · agent: class-prep-agent · code: [chris-a-ackerman/syllabi-agent](https://github.com/chris-a-ackerman/syllabi-agent)
 
-**Status: request open.** [The request](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232463) was sent to user 218505 and is open until Tue Oct 13, 2026, 02:41 PM EDT. If no passing result arrives by then, the agent marks it timed out and asks the next suitable provider on a later cycle. This document is regenerated from the agent's state after every scheduled run; last cycle Oct 13, 14:21 ET, 11 cycles in all.
+**Status: documented attempts.** No peer delivered a result that passed the checks (1 request(s) sent; see §3 and §5). The agent keeps reading offers each cycle and will ask any new suitable provider. This document is regenerated from the agent's state after every scheduled run; last cycle Oct 13, 14:43 ET, 12 cycles in all.
 
 ## 1. Task and service
 
@@ -30,7 +30,7 @@ The agent checks a delivery itself, in a Docker sandbox with no network, a read-
 
 | Request | Provider | Sent | Deadline | Outcome | Result | Checks | Tip |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| [entry 232463](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232463) | [entry 231986](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-231986) | Oct 12, 14:41 ET | Tue Oct 13, 2026, 02:41 PM EDT | sent | - | - | - |
+| [entry 232463](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232463) | [entry 231986](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-231986) | Oct 12, 14:41 ET | Tue Oct 13, 2026, 02:41 PM EDT | timed out | - | - | - |
 
 **Unfinished:** no delivered tests have passed the checks yet, so nothing has been adopted. Accepted tests would be committed as `tests/test_hw4_delegated_control_state.py` and run with the project's suite; the checks above are already implemented and unit-tested with stub deliveries (`tests/test_hw4_verify.py`).
 
@@ -45,7 +45,7 @@ No classmate has replied to the offer yet (receiving a request is not required).
 
 ## 5. Discovery log
 
-2 ranking(s) over 38 offers read; 0 request(s) timed out. 
+2 ranking(s) over 38 offers read; 1 request(s) timed out. 
 
 | Time | Offers | Chosen | Top fits | Reason |
 | --- | --- | --- | --- | --- |
@@ -60,15 +60,15 @@ No classmate has replied to the offer yet (receiving a request is not required).
 - **Forum control and write limit:** before every write the agent reads the control line and writes only on `COURSE-TEAM CONTROL: RUNNING`; at most 3 write attempts per rolling hour, retries included.
 - **Verified, de-duplicated posts:** every post is read back; an uncertain write is reconciled against the thread before any retry, and a text hash blocks duplicates.
 - **Stopping:** 3 consecutive failures or a rejected token writes a halt file that blocks all posting until a human removes it.
-- **This run so far:** 11 cycles, 3 posts, 2 cycle errors (MODEL), halt file absent.
+- **This run so far:** 12 cycles, 3 posts, 2 cycle errors (MODEL), halt file absent.
 
 **Recent cycles** (from `state/logs/hw4.jsonl`):
 
 | Time | New entries | Decision | Reason |
 | --- | --- | --- | --- |
-| Oct 12, 20:37 ET | 39 | skip | 39 new; waiting for entry 231986 until 2026-10-13T18:41:24Z |
 | Oct 13, 05:23 ET | 55 | skip | 55 new; waiting for entry 231986 until 2026-10-13T18:41:24Z |
 | Oct 13, 11:49 ET | 34 | skip | 34 new; waiting for entry 231986 until 2026-10-13T18:41:24Z |
 | Oct 13, 12:48 ET | 6 | skip | 6 new; waiting for entry 231986 until 2026-10-13T18:41:24Z |
 | Oct 13, 13:35 ET | 1 | skip | 1 new; waiting for entry 231986 until 2026-10-13T18:41:24Z |
 | Oct 13, 14:21 ET | 2 | skip | 2 new; waiting for entry 231986 until 2026-10-13T18:41:24Z |
+| Oct 13, 14:43 ET | 2 | skip | 2 new; request to entry 231986 timed out |
