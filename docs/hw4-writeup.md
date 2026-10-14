@@ -2,7 +2,7 @@
 
 MIT AI Studio (MAS.665) · Chris Ackerman · agent: class-prep-agent · code: [chris-a-ackerman/syllabi-agent](https://github.com/chris-a-ackerman/syllabi-agent)
 
-**Status: request open.** [The request](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-233001) was sent to user 195056 and is open until Wed Oct 14, 2026, 10:47 PM EDT. If no passing result arrives by then, the agent marks it timed out and asks the next suitable provider on a later cycle. This document is regenerated from the agent's state after every scheduled run; last cycle Oct 14, 10:48 ET, 25 cycles in all.
+**Status: request open.** [The request](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-233001) was sent to user 195056 and is open until Wed Oct 14, 2026, 10:47 PM EDT. If no passing result arrives by then, the agent marks it timed out and asks the next suitable provider on a later cycle. This document is regenerated from the agent's state after every scheduled run; last cycle Oct 14, 12:48 ET, 26 cycles in all.
 
 ## 1. Task and service
 
@@ -58,7 +58,7 @@ No classmate has replied to the offer yet (receiving a request is not required).
 
 ## 5. Discovery log
 
-5 ranking(s) over 68 offers read; 1 request(s) timed out. 
+5 ranking(s) over 69 offers read; 1 request(s) timed out. 
 
 | Time | Offers | Chosen | Top fits | Reason |
 | --- | --- | --- | --- | --- |
@@ -76,15 +76,15 @@ No classmate has replied to the offer yet (receiving a request is not required).
 - **Forum control and write limit:** before every write the agent reads the control line and writes only on `COURSE-TEAM CONTROL: RUNNING`; at most 3 write attempts per rolling hour, retries included.
 - **Verified, de-duplicated posts:** every post is read back; an uncertain write is reconciled against the thread before any retry, and a text hash blocks duplicates.
 - **Stopping:** 3 consecutive failures or a rejected token writes a halt file that blocks all posting until a human removes it.
-- **This run so far:** 25 cycles, 8 posts, 2 cycle errors (MODEL), halt file absent.
+- **This run so far:** 26 cycles, 8 posts, 2 cycle errors (MODEL), halt file absent.
 
 **Recent cycles** (from `state/logs/hw4.jsonl`):
 
 | Time | New entries | Decision | Reason |
 | --- | --- | --- | --- |
-| Oct 14, 02:49 ET | 22 | skip | 22 new; waiting for entry 232960 until 2026-10-15T02:47:56Z |
 | Oct 14, 04:48 ET | 17 | skip | 17 new; waiting for entry 232960 until 2026-10-15T02:47:56Z |
 | Oct 14, 06:48 ET | 14 | skip | 14 new; waiting for entry 232960 until 2026-10-15T02:47:56Z |
 | Oct 14, 07:48 ET | 10 | skip | 10 new; waiting for entry 232960 until 2026-10-15T02:47:56Z |
 | Oct 14, 08:48 ET | 8 | skip | 8 new; waiting for entry 232960 until 2026-10-15T02:47:56Z |
 | Oct 14, 10:48 ET | 38 | skip | 38 new; waiting for entry 232960 until 2026-10-15T02:47:56Z |
+| Oct 14, 12:48 ET | 30 | skip | 30 new; waiting for entry 232960 until 2026-10-15T02:47:56Z |
