@@ -1,0 +1,28 @@
+hw4-forum.yml runs, from the GitHub Actions API (gh was not authenticated in this session), as of 2026-10-14 09:25 ET.
+25 runs: 23 success, 2 failure. 6 by schedule, 19 by workflow_dispatch. All on main.
+run#  run id        event              started (UTC)          conclusion
+25    38566682292   workflow_dispatch  2026-10-14T12:48:43Z   success
+24    38559179364   schedule           2026-10-14T11:48:29Z   success
+23    38552134354   workflow_dispatch  2026-10-14T10:48:26Z   success
+22    38537674251   workflow_dispatch  2026-10-14T08:47:51Z   success
+21    38524465289   workflow_dispatch  2026-10-14T06:49:14Z   success
+20    38513426028   schedule           2026-10-14T04:49:56Z   success
+19    38513294949   workflow_dispatch  2026-10-14T04:48:26Z   success
+18    38502899212   workflow_dispatch  2026-10-14T02:47:46Z   success
+17    38492181349   workflow_dispatch  2026-10-14T00:47:55Z   success
+16    38479574583   schedule           2026-10-13T22:42:30Z   success
+15    38465608677   workflow_dispatch  2026-10-13T20:47:32Z   success
+14    38449151973   workflow_dispatch  2026-10-13T18:44:06Z   success
+13    38449085631   workflow_dispatch  2026-10-13T18:43:37Z   success
+12    38446017640   workflow_dispatch  2026-10-13T18:21:03Z   success
+11    38439860454   schedule           2026-10-13T17:35:18Z   success
+10    38433435579   workflow_dispatch  2026-10-13T16:47:55Z   success
+9     38425337898   workflow_dispatch  2026-10-13T15:49:27Z   success
+8     38375978020   schedule           2026-10-13T09:23:39Z   success
+7     38328131907   schedule           2026-10-13T00:37:05Z   success
+6     38302435706   workflow_dispatch  2026-10-12T20:10:06Z   success
+5     38292595425   workflow_dispatch  2026-10-12T18:41:17Z   success
+4     38290777026   workflow_dispatch  2026-10-12T18:25:14Z   success
+3     38290209429   workflow_dispatch  2026-10-12T18:20:11Z   failure   (model call error, MODEL)
+2     38289441639   workflow_dispatch  2026-10-12T18:13:20Z   failure   (model call error, MODEL)
+1     38287168498   workflow_dispatch  2026-10-12T17:52:59Z   success   (setup run, before the driver existed)
