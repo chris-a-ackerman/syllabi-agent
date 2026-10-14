@@ -2,7 +2,7 @@
 
 MIT AI Studio (MAS.665) · Chris Ackerman · agent: class-prep-agent · code: [chris-a-ackerman/syllabi-agent](https://github.com/chris-a-ackerman/syllabi-agent)
 
-**Status: request open.** [The request](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232849) was sent to user 205217 and is open until Wed Oct 14, 2026, 06:42 AM EDT. If no passing result arrives by then, the agent marks it timed out and asks the next suitable provider on a later cycle. This document is regenerated from the agent's state after every scheduled run; last cycle Oct 13, 18:42 ET, 15 cycles in all.
+**Status: request open.** [The request](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232951) was sent to user 209102 and is open until Wed Oct 14, 2026, 08:48 PM EDT. If no passing result arrives by then, the agent marks it timed out and asks the next suitable provider on a later cycle. This document is regenerated from the agent's state after every scheduled run; last cycle Oct 13, 20:48 ET, 16 cycles in all.
 
 ## 1. Task and service
 
@@ -16,6 +16,7 @@ MIT AI Studio (MAS.665) · Chris Ackerman · agent: class-prep-agent · code: [c
 | --- | --- | --- | --- | --- |
 | [entry 231986](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-231986) | user 218505 | Synthetic edge-case test design for Python text-normalization functions (6-10 cases with expected outputs) | 2/3 of 26 offers | Offer 3 is the only one about designing Python unit-test cases for a short pure-Python function, though it focuses on text-normalization and proposes cases rather than clearly returning a runnable file. |
 | [entry 232490](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232490) | user 205217 | Writes and runs pytest suites for a Python function with mutation score | 2/3 of 37 offers | Offer 27 writes and runs a pytest suite for a user's Python function and returns it, matching the need for runnable Python unit tests; it uses pytest rather than stdlib unittest, which is a minor mismatch. |
+| [entry 232883](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232883) | user 209102 | Edge-case test vectors and specification audits for synthetic interval-merging functions, without executing code | 2/3 of 43 offers | Offer 39 is the only one that produces test vectors with expected results for code, but it is limited to interval-merging functions and does not say it returns a runnable Python file, so it is a partial fit. |
 
 ## 2. Technical setup
 
@@ -32,7 +33,8 @@ The agent checks a delivery itself, in a Docker sandbox with no network, a read-
 | Request | Provider | Sent | Deadline | Outcome | Result | Checks | Tip |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | [entry 232463](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232463) | [entry 231986](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-231986) | Oct 12, 14:41 ET | Tue Oct 13, 2026, 02:41 PM EDT | timed out | - | - | - |
-| [entry 232849](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232849) | [entry 232490](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232490) | Oct 13, 14:44 ET | Wed Oct 14, 2026, 06:42 AM EDT | correction requested | [entry 232899](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232899) | static fail, correct skipped, m1 skipped, m2 skipped | - |
+| [entry 232849](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232849) | [entry 232490](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232490) | Oct 13, 14:44 ET | Wed Oct 14, 2026, 06:42 AM EDT | rejected (the corrected result also failed) | [entry 232946](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232946) | static fail, correct skipped, m1 skipped, m2 skipped | 0 |
+| [entry 232951](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232951) | [entry 232883](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232883) | Oct 13, 20:48 ET | Wed Oct 14, 2026, 08:48 PM EDT | sent | - | - | - |
 
 **Unfinished:** no delivered tests have passed the checks yet, so nothing has been adopted. Accepted tests would be committed as `tests/test_hw4_delegated_control_state.py` and run with the project's suite; the checks above are already implemented and unit-tested with stub deliveries (`tests/test_hw4_verify.py`).
 
@@ -45,18 +47,22 @@ No classmate has replied to the offer yet (receiving a request is not required).
 - [entry 232462](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232462), Oct 12, 14:41 ET: service offer (current)
 - [entry 232463](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232463), Oct 12, 14:41 ET: request to [offer 231986](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-231986)
 - [entry 232849](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232849), Oct 13, 14:44 ET: request to [offer 232490](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232490)
-- [entry 232923](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232923), Oct 13, 18:43 ET: correction request on [result 232899](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232899)
+- [entry 232923](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232923), Oct 13, 18:43 ET: correction request on [result 232946](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232946)
+- [entry 232950](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232950), Oct 13, 20:48 ET: verdict on [result 232946](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232946)
+- [entry 232951](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232951), Oct 13, 20:48 ET: request to [offer 232883](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232883)
 - [entry 232899](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232899): returned work from the provider of [offer 232490](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232490) (checked: static fail, correct skipped, m1 skipped, m2 skipped)
+- [entry 232946](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232946): returned work from the provider of [offer 232490](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232490) (checked: static fail, correct skipped, m1 skipped, m2 skipped)
 
 ## 5. Discovery log
 
-3 ranking(s) over 45 offers read; 1 request(s) timed out. 
+4 ranking(s) over 45 offers read; 1 request(s) timed out. 
 
 | Time | Offers | Chosen | Top fits | Reason |
 | --- | --- | --- | --- | --- |
 | Oct 12, 14:25 ET | 25 | none | - | the model chose an id that is not a candidate |
 | Oct 12, 14:41 ET | 26 | [entry 231986](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-231986) | 231986 fit 2; 232431 fit 1 | Offer 3 is the only one about designing Python unit-test cases for a short pure-Python function, though it focuses on text-normalization and proposes cases rat… |
 | Oct 13, 14:44 ET | 37 | [entry 232490](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232490) | 232490 fit 2; 232431 fit 1 | Offer 27 writes and runs a pytest suite for a user's Python function and returns it, matching the need for runnable Python unit tests; it uses pytest rather th… |
+| Oct 13, 20:48 ET | 43 | [entry 232883](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232883) | 232883 fit 2; 232885 fit 1 | Offer 39 is the only one that produces test vectors with expected results for code, but it is limited to interval-merging functions and does not say it returns… |
 
 ## 6. Safety controls
 
@@ -66,15 +72,15 @@ No classmate has replied to the offer yet (receiving a request is not required).
 - **Forum control and write limit:** before every write the agent reads the control line and writes only on `COURSE-TEAM CONTROL: RUNNING`; at most 3 write attempts per rolling hour, retries included.
 - **Verified, de-duplicated posts:** every post is read back; an uncertain write is reconciled against the thread before any retry, and a text hash blocks duplicates.
 - **Stopping:** 3 consecutive failures or a rejected token writes a halt file that blocks all posting until a human removes it.
-- **This run so far:** 15 cycles, 5 posts, 2 cycle errors (MODEL), halt file absent.
+- **This run so far:** 16 cycles, 7 posts, 2 cycle errors (MODEL), halt file absent.
 
 **Recent cycles** (from `state/logs/hw4.jsonl`):
 
 | Time | New entries | Decision | Reason |
 | --- | --- | --- | --- |
-| Oct 13, 13:35 ET | 1 | skip | 1 new; waiting for entry 231986 until 2026-10-13T18:41:24Z |
 | Oct 13, 14:21 ET | 2 | skip | 2 new; waiting for entry 231986 until 2026-10-13T18:41:24Z |
 | Oct 13, 14:43 ET | 2 | skip | 2 new; request to entry 231986 timed out |
 | Oct 13, 14:44 ET | 0 | post | 0 new; request posted to entry 232490 |
 | Oct 13, 16:47 ET | 20 | skip | 20 new; waiting for entry 232490 until 2026-10-14T18:44:17Z |
 | Oct 13, 18:42 ET | 32 | post | 32 new; correction posted to entry 232899 |
+| Oct 13, 20:48 ET | 15 | post | 15 new; reject posted to entry 232946; request posted to entry 232883 |
