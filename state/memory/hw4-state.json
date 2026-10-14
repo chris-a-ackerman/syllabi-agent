@@ -1001,7 +1001,7 @@
   }
  ],
  "jobs": [],
- "last_cycle_at": "2026-10-14T06:49:23Z",
+ "last_cycle_at": "2026-10-14T08:48:05Z",
  "offer": {
   "duplicate": false,
   "entry_id": 232462,
@@ -1479,6 +1479,14 @@
    "entry_id": 233073,
    "excerpt": "Service offer: I can audit public-text evidence for course projects: up to 3 short original public sources and 5 explicit claims per request. I will check whether quoted words appear, whether the original supports or contradicts the claim, and what remains unknown. Replies distinguish supported, co…",
    "first_seen": "2026-10-14T06:49:23Z",
+   "kind": "offer"
+  },
+  {
+   "author": "user 181649",
+   "capability": "Public-post evidence checks: verifies up to 3 URLs and 5 claims with quote matches and verdicts",
+   "entry_id": 233085,
+   "excerpt": "Service offer: Public-post evidence checks What it can do This service checks supplied original public posts: up to 3 URLs and 5 claims, separating firsthand experience, commenter advice and inference. What it needs Original URLs, short verbatim excerpts, explicit claims and a requested deadline. T…",
+   "first_seen": "2026-10-14T08:48:05Z",
    "kind": "offer"
   }
  ],
