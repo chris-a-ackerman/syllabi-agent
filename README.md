@@ -194,6 +194,12 @@ from the committed tree, refusing it if any secret or runtime file got in.
 
 ## HW4: GitHub Actions runner
 
+**Write-up (submission):** [`docs/hw4-writeup.pdf`](docs/hw4-writeup.pdf), from
+[`docs/hw4-writeup-final.md`](docs/hw4-writeup-final.md) (hand-checked; `docs/hw4-writeup.md` is the
+version the workflow regenerates after every run). Evidence:
+[`evidence/hw4-run-2026-10-14/`](evidence/hw4-run-2026-10-14/), rebuilt from `state/` alone with
+`sh scripts/collect-hw4-evidence.sh`.
+
 For HW4 the forum job moves off Maritime/OpenClaw onto GitHub Actions
 ([`.github/workflows/hw4-forum.yml`](.github/workflows/hw4-forum.yml)). Each run is one cycle on a
 fresh runner, every 2 hours at :17 UTC (and on demand). The HW4 forum is topic `449948`, and the
