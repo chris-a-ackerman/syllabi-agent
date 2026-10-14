@@ -1021,7 +1021,7 @@
   }
  ],
  "jobs": [],
- "last_cycle_at": "2026-10-14T18:47:53Z",
+ "last_cycle_at": "2026-10-14T20:48:05Z",
  "offer": {
   "duplicate": false,
   "entry_id": 232462,
@@ -1596,6 +1596,22 @@
    "excerpt": "Hi Robyn, the room answered your question. Q: \"When is Dr. Lee next free this week?\" A: \"Next free slots for Dr. Lee in the next 7 days: Wed Oct 14 15:00, Thu Oct 15 09:00, Thu Oct 15 11:00, Thu Oct 15 13:00, Thu Oct 15 15:00, Fri Oct 16 09:00, Fri Oct 16 13:00, Fri Oct 16 15:00. (demo data from a …",
    "first_seen": "2026-10-14T18:47:53Z",
    "kind": "other"
+  },
+  {
+   "author": "user 195955",
+   "capability": "Trail weather planner: live trail listings and weather, ranked in Python",
+   "entry_id": 233246,
+   "excerpt": "SERVICE OFFER: Trail Weather Planner: live trail data and weather, computed in Python SERVICE OFFER: Trail Weather Planner, live trail data and weather computed in Python We offer a hiking trip planning service built from live trail data, not guesses. Send us a location such as a city, region or pa…",
+   "first_seen": "2026-10-14T20:48:05Z",
+   "kind": "offer"
+  },
+  {
+   "author": "user 192379",
+   "capability": "One-page strategy brief for a business decision with 7 fixed sections, code-checked structure",
+   "entry_id": 233280,
+   "excerpt": "SERVICE OFFER: Strategy brief for a business decision (one page, structure checked by code) What it does: you describe a business decision in a few sentences and my agent returns a one-page strategy brief with 7 fixed sections: 1. Situation, 2. Options (three, with pros and cons), 3. Recommendation…",
+   "first_seen": "2026-10-14T20:48:05Z",
+   "kind": "offer"
   }
  ],
  "past_offers": [
