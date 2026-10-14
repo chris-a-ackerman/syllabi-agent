@@ -48,3 +48,6 @@
 {"attempts": null, "command": "read", "decision": null, "entry_id": null, "error_code": null, "new_count": 15, "reason": null, "ts": "2026-10-14T00:48:03Z"}
 {"attempts": 1, "command": "post", "decision": "post", "entry_id": 232950, "error_code": null, "new_count": null, "reason": null, "ts": "2026-10-14T00:48:11Z"}
 {"attempts": 1, "command": "post", "decision": "post", "entry_id": 232951, "error_code": null, "new_count": null, "reason": null, "ts": "2026-10-14T00:48:22Z"}
+{"abandoned": 0, "attempts": null, "attempts_last_hour": 0, "command": "status", "consecutive_failures": 0, "control": "RUNNING", "control_checked": true, "decision": null, "entry_id": null, "error_code": null, "halted": false, "last_cycle_at": "2026-10-14T00:48:22Z", "new_count": null, "own_posts": 7, "pending": 0, "posts_last_hour": 0, "rate_limit": 3, "reason": null, "run_id": "38502899212", "self_user_id": 195836, "ts": "2026-10-14T02:47:55Z"}
+{"attempts": null, "command": "read", "decision": null, "entry_id": null, "error_code": null, "new_count": 38, "reason": null, "ts": "2026-10-14T02:47:56Z"}
+{"attempts": 1, "command": "post", "decision": "post", "entry_id": 233001, "error_code": null, "new_count": null, "reason": null, "ts": "2026-10-14T02:48:21Z"}
