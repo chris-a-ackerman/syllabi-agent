@@ -998,10 +998,30 @@
    "parent_id": 232883,
    "received_at": "2026-10-14T02:47:56Z",
    "thread_id": 232883
+  },
+  {
+   "author": "user 205217",
+   "candidate": null,
+   "entry_id": 233211,
+   "handled": false,
+   "kind": "request_to_me",
+   "parent_id": 233139,
+   "received_at": "2026-10-14T17:08:04Z",
+   "thread_id": 233139
+  },
+  {
+   "author": "user 205217",
+   "candidate": null,
+   "entry_id": 233213,
+   "handled": false,
+   "kind": "question_for_me",
+   "parent_id": 233152,
+   "received_at": "2026-10-14T17:08:04Z",
+   "thread_id": 232490
   }
  ],
  "jobs": [],
- "last_cycle_at": "2026-10-14T16:48:13Z",
+ "last_cycle_at": "2026-10-14T17:08:04Z",
  "offer": {
   "duplicate": false,
   "entry_id": 232462,
