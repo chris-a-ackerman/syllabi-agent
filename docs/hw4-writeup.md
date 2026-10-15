@@ -2,7 +2,7 @@
 
 MIT AI Studio (MAS.665) · Chris Ackerman · agent: class-prep-agent · code: [chris-a-ackerman/syllabi-agent](https://github.com/chris-a-ackerman/syllabi-agent)
 
-**Status: request open.** [The request](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-233001) was sent to user 195056 and is open until Wed Oct 14, 2026, 10:47 PM EDT. If no passing result arrives by then, the agent marks it timed out and asks the next suitable provider on a later cycle. This document is regenerated from the agent's state after every scheduled run; last cycle Oct 14, 20:31 ET, 32 cycles in all.
+**Status: documented attempts.** No peer delivered a result that passed the checks (4 request(s) sent; see §3 and §5). The agent keeps reading offers each cycle and will ask any new suitable provider. This document is regenerated from the agent's state after every scheduled run; last cycle Oct 14, 22:48 ET, 33 cycles in all.
 
 ## 1. Task and service
 
@@ -36,7 +36,7 @@ The agent checks a delivery itself, in a Docker sandbox with no network, a read-
 | [entry 232463](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232463) | [entry 231986](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-231986) | Oct 12, 14:41 ET | Tue Oct 13, 2026, 02:41 PM EDT | timed out | - | - | - |
 | [entry 232849](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232849) | [entry 232490](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232490) | Oct 13, 14:44 ET | Wed Oct 14, 2026, 06:42 AM EDT | rejected (the corrected result also failed) | [entry 232946](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232946) | static fail, correct skipped, m1 skipped, m2 skipped | 0 |
 | [entry 232951](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232951) | [entry 232883](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232883) | Oct 13, 20:48 ET | Wed Oct 14, 2026, 08:48 PM EDT | rejected (provider declined) | - | - | 0 |
-| [entry 233001](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-233001) | [entry 232960](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232960) | Oct 13, 22:47 ET | Wed Oct 14, 2026, 10:47 PM EDT | sent | - | - | - |
+| [entry 233001](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-233001) | [entry 232960](https://canvas.mit.edu/courses/40577/discussion_topics/449948#entry-232960) | Oct 13, 22:47 ET | Wed Oct 14, 2026, 10:47 PM EDT | timed out | - | - | - |
 
 **Unfinished:** no delivered tests have passed the checks yet, so nothing has been adopted. Accepted tests would be committed as `tests/test_hw4_delegated_control_state.py` and run with the project's suite; the checks above are already implemented and unit-tested with stub deliveries (`tests/test_hw4_verify.py`).
 
@@ -58,7 +58,7 @@ No classmate has replied to the offer yet (receiving a request is not required).
 
 ## 5. Discovery log
 
-5 ranking(s) over 75 offers read; 1 request(s) timed out. 
+5 ranking(s) over 76 offers read; 2 request(s) timed out. 
 
 | Time | Offers | Chosen | Top fits | Reason |
 | --- | --- | --- | --- | --- |
@@ -76,15 +76,15 @@ No classmate has replied to the offer yet (receiving a request is not required).
 - **Forum control and write limit:** before every write the agent reads the control line and writes only on `COURSE-TEAM CONTROL: RUNNING`; at most 3 write attempts per rolling hour, retries included.
 - **Verified, de-duplicated posts:** every post is read back; an uncertain write is reconciled against the thread before any retry, and a text hash blocks duplicates.
 - **Stopping:** 3 consecutive failures or a rejected token writes a halt file that blocks all posting until a human removes it.
-- **This run so far:** 32 cycles, 8 posts, 2 cycle errors (MODEL), halt file absent.
+- **This run so far:** 33 cycles, 8 posts, 2 cycle errors (MODEL), halt file absent.
 
 **Recent cycles** (from `state/logs/hw4.jsonl`):
 
 | Time | New entries | Decision | Reason |
 | --- | --- | --- | --- |
-| Oct 14, 13:08 ET | 3 | skip | 3 new; waiting for entry 232960 until 2026-10-15T02:47:56Z |
 | Oct 14, 14:47 ET | 20 | skip | 20 new; waiting for entry 232960 until 2026-10-15T02:47:56Z |
 | Oct 14, 16:48 ET | 32 | skip | 32 new; waiting for entry 232960 until 2026-10-15T02:47:56Z |
 | Oct 14, 17:39 ET | 6 | skip | 6 new; waiting for entry 232960 until 2026-10-15T02:47:56Z |
 | Oct 14, 18:48 ET | 12 | skip | 12 new; waiting for entry 232960 until 2026-10-15T02:47:56Z |
 | Oct 14, 20:31 ET | 23 | skip | 23 new; waiting for entry 232960 until 2026-10-15T02:47:56Z |
+| Oct 14, 22:48 ET | 17 | skip | 17 new; request to entry 232960 timed out |
