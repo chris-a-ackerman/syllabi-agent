@@ -1,0 +1,6 @@
+{
+ "halted_at": "2026-10-15T04:48:13Z",
+ "reason": "Canvas rejected the token (last: CANVAS_401)",
+ "error_code": "CANVAS_401",
+ "note": "Written by the forum tool. Only a human deletes this file; posting stays off until then."
+}

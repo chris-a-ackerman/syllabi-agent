@@ -34,3 +34,4 @@
 {"actions": [], "control": "RUNNING", "decision": "skip", "new_count": 12, "posts": 0, "reason": "12 new; waiting for entry 232960 until 2026-10-15T02:47:56Z", "ts": "2026-10-14T22:48:42Z"}
 {"actions": [], "control": "RUNNING", "decision": "skip", "new_count": 23, "posts": 0, "reason": "23 new; waiting for entry 232960 until 2026-10-15T02:47:56Z", "ts": "2026-10-15T00:31:01Z"}
 {"actions": [{"action": "request", "provider": 232960, "result": "timed_out"}], "control": "RUNNING", "decision": "skip", "new_count": 17, "posts": 0, "reason": "17 new; request to entry 232960 timed out", "ts": "2026-10-15T02:48:00Z"}
+{"actions": [], "control": null, "decision": "error", "error_code": "CANVAS_401", "new_count": 0, "posts": 0, "reason": "forum read failed: CANVAS_401", "ts": "2026-10-15T04:48:13Z"}
